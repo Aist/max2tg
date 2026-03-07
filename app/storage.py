@@ -150,9 +150,15 @@ class Storage:
             row = await cur.fetchone()
             return self._row_to_user(row)
 
-    async def list_users(self) -> list[TgUserRecord]:
+    async def list_users_page(self, page: int = 1, page_size: int = 10) -> tuple[list[TgUserRecord], int]:
+        page = max(1, page)
+        page_size = max(1, min(page_size, 10))
+        offset = (page - 1) * page_size
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
+            total_cur = await db.execute("SELECT COUNT(*) AS cnt FROM tg_users")
+            total_row = await total_cur.fetchone()
+            total = int(total_row["cnt"]) if total_row else 0
             cur = await db.execute(
                 """
                 SELECT
@@ -166,10 +172,13 @@ class Storage:
                     ON a.tg_user_id = u.tg_user_id AND a.is_active = 1
                 GROUP BY u.tg_user_id, u.is_active, u.created_at, u.activated_at
                 ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
                 """
+                ,
+                (page_size, offset),
             )
             rows = await cur.fetchall()
-            return [self._row_to_user(row) for row in rows]
+            return [self._row_to_user(row) for row in rows], total
 
     async def add_account(
         self,
@@ -241,3 +250,19 @@ class Storage:
             )
             await db.commit()
             return cur.rowcount > 0
+
+    async def delete_accounts_for_user(self, tg_user_id: int) -> list[int]:
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT id FROM max_accounts WHERE tg_user_id = ?",
+                (tg_user_id,),
+            )
+            rows = await cur.fetchall()
+            account_ids = [int(row["id"]) for row in rows]
+            await db.execute(
+                "DELETE FROM max_accounts WHERE tg_user_id = ?",
+                (tg_user_id,),
+            )
+            await db.commit()
+            return account_ids

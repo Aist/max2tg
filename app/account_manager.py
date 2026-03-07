@@ -84,11 +84,15 @@ class AccountManager:
     async def activate_user(self, tg_user_id: int) -> TgUserRecord:
         return await self._storage.activate_user(tg_user_id)
 
-    async def deactivate_user(self, tg_user_id: int) -> TgUserRecord:
-        return await self._storage.deactivate_user(tg_user_id)
+    async def deactivate_user(self, tg_user_id: int) -> tuple[TgUserRecord, int]:
+        account_ids = await self._storage.delete_accounts_for_user(tg_user_id)
+        for account_id in account_ids:
+            await self._stop_runtime(account_id)
+        user = await self._storage.deactivate_user(tg_user_id)
+        return user, len(account_ids)
 
-    async def list_users(self) -> list[TgUserRecord]:
-        return await self._storage.list_users()
+    async def list_users_page(self, page: int = 1, page_size: int = 10) -> tuple[list[TgUserRecord], int]:
+        return await self._storage.list_users_page(page=page, page_size=page_size)
 
     async def is_user_active(self, tg_user_id: int) -> bool:
         user = await self._storage.ensure_user(tg_user_id)

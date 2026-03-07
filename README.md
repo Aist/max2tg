@@ -88,7 +88,7 @@ cp .env.example .env
 - `/bind <tg_user_id> <device_id> <token> [name]`
 - `/activate <tg_user_id>`
 - `/deactivate <tg_user_id>`
-- `/users`
+- `/users [page]`
 - `/help`
 
 ## Запуск
@@ -311,7 +311,7 @@ For admin:
 - `/bind <tg_user_id> <device_id> <token> [name]`
 - `/activate <tg_user_id>`
 - `/deactivate <tg_user_id>`
-- `/users`
+- `/users [page]`
 - `/help`
 
 ## Running

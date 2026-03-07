@@ -44,7 +44,7 @@ def _admin_help() -> str:
         "/bind <tg_user_id> <device_id> <token> [name] - создать привязку пользователю\n"
         "/activate <tg_user_id> - активировать пользователя\n"
         "/deactivate <tg_user_id> - деактивировать пользователя\n"
-        "/users - список пользователей и статусы\n"
+        "/users [page] - список пользователей и статусы (по 10)\n"
         "/register <device_id> <token> [name] - привязать MAX себе\n"
         "/accounts - список ваших MAX аккаунтов\n"
         "/remove <account_id> - отключить вашу привязку\n"
@@ -179,17 +179,41 @@ async def _on_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     manager: AccountManager = context.bot_data["account_manager"]
-    users = await manager.list_users()
+    args = context.args or []
+    page = 1
+    if args:
+        if not args[0].isdigit() or int(args[0]) < 1:
+            await update.message.reply_text("Формат: /users [page], где page >= 1")
+            return
+        page = int(args[0])
+
+    users, total = await manager.list_users_page(page=page, page_size=10)
     if not users:
         await update.message.reply_text("Список пользователей пуст.")
         return
 
-    rows = ["Пользователи:"]
+    total_pages = (total + 9) // 10 if total else 1
+    rows = [f"Пользователи (page {page}/{total_pages}, всего {total}):"]
     for user in users:
         status = "active" if user.is_active else "inactive"
+        nickname = "n/a"
+        try:
+            chat = await context.bot.get_chat(user.tg_user_id)
+            if chat.username:
+                nickname = f"@{chat.username}"
+            else:
+                full_name = " ".join(
+                    part for part in [chat.first_name, chat.last_name] if part
+                ).strip()
+                if full_name:
+                    nickname = full_name
+        except Exception:
+            nickname = "unavailable"
         rows.append(
-            f"- {user.tg_user_id} | {status} | accounts={user.accounts_count}"
+            f"- {user.tg_user_id} | {nickname} | {status} | accounts={user.accounts_count}"
         )
+    if page < total_pages:
+        rows.append(f"Дальше: /users {page + 1}")
     await update.message.reply_text("\n".join(rows))
 
 
@@ -205,8 +229,10 @@ async def _on_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     target_user_id = int(args[0])
-    await manager.deactivate_user(target_user_id)
-    await update.message.reply_text(f"✅ Пользователь {target_user_id} деактивирован.")
+    _, removed_count = await manager.deactivate_user(target_user_id)
+    await update.message.reply_text(
+        f"✅ Пользователь {target_user_id} деактивирован. Удалено привязок MAX: {removed_count}."
+    )
 
 
 async def _on_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
