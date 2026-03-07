@@ -25,7 +25,7 @@ ACCEPT_TERMS_CALLBACK = "accept_terms"
 ASKME_COOLDOWN_SEC = 24 * 60 * 60
 
 TERMS_TEXT = (
-    "**Отказ от ответсвенности:**\n"
+    "*Отказ от ответсвенности:*\n"
     "1. Этот проект является независимым, неофициальным и не связан с разработчиками "
     "мессенджера Max (или любой другой сторонней организацией). Авторы Max не одобряют, "
     "не поддерживают и не несут ответственности за этот код.\n\n"
@@ -68,7 +68,7 @@ def _terms_keyboard() -> InlineKeyboardMarkup:
 async def _send_terms(update: Update) -> None:
     message = update.effective_message
     if message:
-        await message.reply_text(TERMS_TEXT, reply_markup=_terms_keyboard())
+        await message.reply_text(TERMS_TEXT, reply_markup=_terms_keyboard(),parse_mode="Markdown")
 
 
 async def _ensure_terms_accepted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -159,9 +159,9 @@ async def _notify_admin_registration(update: Update, context: ContextTypes.DEFAU
     tg_user_id = int(update.effective_user.id)
     username = _display_user(update)
     text = (
-        f"Пользователь {tg_user_id} с ником {username} зарегистрировался в боте"
+        f"Пользователь {username} зарегистрировался в боте. Для активации `/activate {tg_user_id}`."
     )
-    await context.bot.send_message(chat_id=admin_id, text=text)
+    await context.bot.send_message(chat_id=admin_id, text=text, parse_mode="Markdown")
 
 
 async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -573,6 +573,7 @@ async def _on_accept_terms(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.message.reply_text(
         "✅ Соглашение принято. Профиль создан.\n"
         "Сейчас ваш статус: деактивирован. Для выдачи доступа к привязке MAX обратитесь к администратору.\n"
+        "Предварительно изучите инструкцию по привязке /register.\n"
         "Доступные команды: /help"
     )
 
