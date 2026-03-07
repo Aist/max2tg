@@ -21,6 +21,11 @@ PENDING_REPLY_LABEL_KEY = "pending_reply_label"
 PENDING_REPLY_ACCOUNT_KEY = "pending_reply_account_id"
 
 
+def _is_private_chat(update: Update) -> bool:
+    chat = update.effective_chat
+    return bool(chat and chat.type == "private")
+
+
 def _is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     admin_id = int(context.bot_data["admin_id"])
     return int(update.effective_user.id) == admin_id
@@ -85,6 +90,8 @@ def _max_creds_guide_bind() -> str:
 
 
 async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     manager: AccountManager = context.bot_data["account_manager"]
     tg_user_id = int(update.effective_user.id)
     user = await manager.ensure_user(tg_user_id)
@@ -95,6 +102,8 @@ async def _on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if _is_admin(update, context):
         await update.message.reply_text(_admin_help())
         return
@@ -102,6 +111,8 @@ async def _on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     manager: AccountManager = context.bot_data["account_manager"]
     tg_user_id = int(update.effective_user.id)
 
@@ -132,6 +143,8 @@ async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if not _is_admin(update, context):
         await update.message.reply_text("⚠️ Команда доступна только администратору.")
         return
@@ -158,6 +171,8 @@ async def _on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_activate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if not _is_admin(update, context):
         await update.message.reply_text("⚠️ Команда доступна только администратору.")
         return
@@ -174,6 +189,8 @@ async def _on_activate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _on_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if not _is_admin(update, context):
         await update.message.reply_text("⚠️ Команда доступна только администратору.")
         return
@@ -218,6 +235,8 @@ async def _on_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if not _is_admin(update, context):
         await update.message.reply_text("⚠️ Команда доступна только администратору.")
         return
@@ -236,6 +255,8 @@ async def _on_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def _on_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     manager: AccountManager = context.bot_data["account_manager"]
     tg_user_id = int(update.effective_user.id)
     accounts = await manager.list_accounts_for_user(tg_user_id)
@@ -252,6 +273,8 @@ async def _on_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def _on_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     manager: AccountManager = context.bot_data["account_manager"]
     args = context.args or []
     if len(args) != 1 or not args[0].isdigit():
@@ -268,6 +291,8 @@ async def _on_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     query = update.callback_query
     await query.answer()
 
@@ -302,6 +327,8 @@ async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     if context.user_data.pop(PENDING_REPLY_CHAT_KEY, None) is not None:
         context.user_data.pop(PENDING_REPLY_LABEL_KEY, None)
         context.user_data.pop(PENDING_REPLY_ACCOUNT_KEY, None)
@@ -311,6 +338,8 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
     account_id = context.user_data.pop(PENDING_REPLY_ACCOUNT_KEY, None)
     max_chat_id = context.user_data.pop(PENDING_REPLY_CHAT_KEY, None)
     label = context.user_data.pop(PENDING_REPLY_LABEL_KEY, None)

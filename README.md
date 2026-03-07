@@ -27,6 +27,8 @@
 - Работает как userbot — подключается к вашему аккаунту Max через WebSocket
 - Поддержка нескольких MAX-аккаунтов одновременно
 - Легковесное хранение только реквизитов подключения и связки с Telegram-пользователем (SQLite)
+- Ротация логов: 1MB на файл, до 3 архивов
+- Еженедельный backup SQLite (хранится 4 последних копии)
 - Docker-ready: разворачивается одной командой
 
 ## Требования
@@ -250,6 +252,8 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 - Works as a userbot — connects to your Max account via WebSocket
 - Multiple MAX accounts at the same time
 - Lightweight storage for account credentials and MAX↔Telegram user bindings only (SQLite)
+- Log rotation: 1MB per file, up to 3 rotated files
+- Weekly SQLite backup (keeps last 4 copies)
 - Docker-ready: deploy with a single command
 
 ## Requirements

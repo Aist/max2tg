@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.account_manager import AccountManager
 from app.config import load_settings
+from app.maintenance import configure_logging, weekly_backup_loop
 from app.storage import Storage
 from app.tg_handler import build_tg_app
 from app.tg_sender import TelegramSender
@@ -46,16 +47,7 @@ async def main():
 
     settings = load_settings()
 
-    level = logging.DEBUG if settings.debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        force=True,
-    )
-    logging.getLogger("aiohttp").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING if not settings.debug else logging.DEBUG)
+    configure_logging(settings.debug)
 
     log.info("Debug mode: %s", "ON" if settings.debug else "OFF")
 
@@ -85,11 +77,20 @@ async def main():
     except Exception:
         log.exception("Failed to send startup notification to admin_id=%s", settings.tg_admin_id)
 
+    backup_stop_event = asyncio.Event()
+    backup_task = asyncio.create_task(
+        weekly_backup_loop(settings.db_path, backup_stop_event),
+        name="weekly-db-backup",
+    )
+
     try:
         while True:
             await asyncio.sleep(3600)
     finally:
         log.info("Shutting down...")
+        backup_stop_event.set()
+        backup_task.cancel()
+        await asyncio.gather(backup_task, return_exceptions=True)
         await tg_app.updater.stop()
         await tg_app.stop()
         await tg_app.shutdown()
