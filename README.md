@@ -29,6 +29,7 @@
 - Легковесное хранение только реквизитов подключения и связки с Telegram-пользователем (SQLite)
 - Ротация логов: 1MB на файл, до 3 архивов
 - Еженедельный backup SQLite (хранится 4 последних копии)
+- Очередь отправки в Telegram с воркерами и опциональным Redis backend для большого потока
 - Docker-ready: разворачивается одной командой
 
 ## Требования
@@ -73,6 +74,10 @@ cp .env.example .env
 | `TG_BOT_TOKEN` | да | Токен Telegram-бота |
 | `TG_ADMIN_ID` | да | Telegram ID администратора бота |
 | `DB_PATH` | нет | Путь к SQLite БД (по умолчанию `data/max2tg.sqlite3`) |
+| `REDIS_URL` | нет | URL Redis для внешней очереди отправки |
+| `TG_QUEUE_WORKERS` | нет | Количество воркеров отправки в TG |
+| `TG_MIN_SEND_INTERVAL_MS` | нет | Минимальный интервал между отправками (мс) |
+| `TG_QUEUE_MAX_ATTEMPTS` | нет | Количество попыток отправки через очередь |
 | `DEBUG` | нет | `true` — подробные логи |
 | `REPLY_ENABLED` | нет | `true` — разрешить ответы из Telegram в Max |
 | `MAX_TOKEN` | нет | legacy bootstrap для авто-регистрации первого аккаунта |
@@ -254,6 +259,7 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 - Lightweight storage for account credentials and MAX↔Telegram user bindings only (SQLite)
 - Log rotation: 1MB per file, up to 3 rotated files
 - Weekly SQLite backup (keeps last 4 copies)
+- Telegram outbound queue with workers and optional Redis backend for high throughput
 - Docker-ready: deploy with a single command
 
 ## Requirements
@@ -298,6 +304,10 @@ cp .env.example .env
 | `TG_BOT_TOKEN` | yes | Telegram bot token |
 | `TG_ADMIN_ID` | yes | Telegram bot admin user ID |
 | `DB_PATH` | no | SQLite path (default `data/max2tg.sqlite3`) |
+| `REDIS_URL` | no | Redis URL for outbound queue backend |
+| `TG_QUEUE_WORKERS` | no | Number of TG sender workers |
+| `TG_MIN_SEND_INTERVAL_MS` | no | Minimum delay between sends (ms) |
+| `TG_QUEUE_MAX_ATTEMPTS` | no | Number of queue send attempts |
 | `DEBUG` | no | `true` — verbose logs |
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
 | `MAX_TOKEN` | no | legacy bootstrap for first account |

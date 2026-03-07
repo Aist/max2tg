@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.account_manager import AccountManager
 from app.config import load_settings
 from app.maintenance import configure_logging, weekly_backup_loop
+from app.message_queue import QueuedTelegramSender
 from app.storage import Storage
 from app.tg_handler import build_tg_app
 from app.tg_sender import TelegramSender
@@ -54,7 +55,15 @@ async def main():
     storage = Storage(settings.db_path)
     await storage.init()
 
-    sender = TelegramSender(settings.tg_bot_token)
+    tg_transport = TelegramSender(settings.tg_bot_token)
+    await tg_transport.start()
+    sender = QueuedTelegramSender(
+        sender=tg_transport,
+        redis_url=settings.redis_url,
+        workers=settings.tg_queue_workers,
+        min_send_interval_ms=settings.tg_min_send_interval_ms,
+        max_attempts=settings.tg_queue_max_attempts,
+    )
     await sender.start()
 
     manager = AccountManager(
@@ -73,7 +82,7 @@ async def main():
     await tg_app.updater.start_polling(drop_pending_updates=True)
     log.info("Telegram polling started")
     try:
-        await sender.bot.send_message(chat_id=settings.tg_admin_id, text="я запустился")
+        await tg_transport.bot.send_message(chat_id=settings.tg_admin_id, text="я запустился")
     except Exception:
         log.exception("Failed to send startup notification to admin_id=%s", settings.tg_admin_id)
 
@@ -96,6 +105,7 @@ async def main():
         await tg_app.shutdown()
         await manager.stop_all()
         await sender.stop()
+        await tg_transport.stop()
 
 
 if __name__ == "__main__":

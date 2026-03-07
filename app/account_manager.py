@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from app.max_listener import create_max_client
 from app.storage import MaxAccountRecord, Storage, TgUserRecord
-from app.tg_sender import TelegramSender
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class AccountManager:
     def __init__(
         self,
         storage: Storage,
-        sender: TelegramSender,
+        sender: Any,
         debug: bool = False,
         reply_enabled: bool = False,
     ):
