@@ -29,6 +29,19 @@ class ContactResolver:
     def user_name(self, user_id: Any) -> str:
         return self.users.get(user_id, str(user_id))
 
+    def update_chat_from_event(self, payload: dict, chat_id: Any) -> None:
+        """Best-effort update of chat title/type from incoming DISPATCH payload."""
+        if chat_id is None or not isinstance(payload, dict):
+            return
+        found = self._find_chat_meta(payload, chat_id, depth=0)
+        if not found:
+            return
+        title, ctype = found
+        if title:
+            self.chats[chat_id] = title
+        if ctype:
+            self.chat_types[chat_id] = ctype
+
     async def resolve_user(self, user_id: Any) -> str:
         if user_id in self.users:
             return self.users[user_id]
@@ -151,6 +164,33 @@ class ContactResolver:
         elif isinstance(obj, list):
             for item in obj:
                 self._deep_extract(item, depth + 1)
+
+    def _find_chat_meta(self, obj: Any, chat_id: Any, depth: int) -> tuple[str | None, str | None] | None:
+        if depth > 6:
+            return None
+        if isinstance(obj, dict):
+            id_candidates = [obj.get("id"), obj.get("chatId"), obj.get("chat_id")]
+            for cand in id_candidates:
+                if cand == chat_id:
+                    title = (
+                        obj.get("title")
+                        or obj.get("chatTitle")
+                        or obj.get("name")
+                        or obj.get("displayName")
+                    )
+                    ctype = obj.get("type") or obj.get("chatType")
+                    if title or ctype:
+                        return (str(title) if title else None, str(ctype) if ctype else None)
+            for value in obj.values():
+                found = self._find_chat_meta(value, chat_id, depth + 1)
+                if found:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = self._find_chat_meta(item, chat_id, depth + 1)
+                if found:
+                    return found
+        return None
 
     @staticmethod
     def _extract_name_from_contact(c: dict) -> str:

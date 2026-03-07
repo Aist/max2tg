@@ -255,6 +255,7 @@ def create_max_client(
         if msg.is_self:
             return
 
+        resolver.update_chat_from_event(msg.raw, msg.chat_id)
         sender_label = escape(await resolver.resolve_user(msg.sender_id))
         is_dm = resolver.is_dm(msg.chat_id)
         chat_label = escape(resolver.chat_name(msg.chat_id))
