@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.max_listener import create_max_client
-from app.storage import MaxAccountRecord, Storage, TgUserRecord
+from app.storage import DailyReportRow, MaxAccountRecord, Storage, TgUserRecord
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +122,9 @@ class AccountManager:
         resp = await runtime.client.send_message(max_chat_id, text)
         return bool(resp)
 
+    async def get_daily_report(self, days: int = 10) -> list[DailyReportRow]:
+        return await self._storage.get_daily_report(days=days)
+
     async def _start_record(self, record: MaxAccountRecord) -> None:
         async with self._lock:
             if record.id in self._runtimes:
@@ -134,6 +137,7 @@ class AccountManager:
                 max_token=record.max_token,
                 max_device_id=record.max_device_id,
                 sender=self._sender,
+                stats_callback=self._storage.increment_daily_metric,
                 account_label=label,
                 debug=self._debug,
                 reply_enabled=self._reply_enabled,

@@ -1,5 +1,6 @@
 import logging
 from html import escape
+from typing import Awaitable, Callable
 
 from app.max_client import MaxClient, MaxMessage
 from app.resolver import ContactResolver
@@ -224,6 +225,7 @@ def create_max_client(
     max_token: str,
     max_device_id: str,
     sender: TelegramSender,
+    stats_callback: Callable[[str], Awaitable[None]] | None = None,
     account_label: str = "",
     debug: bool = False, reply_enabled: bool = False,
 ) -> MaxClient:
@@ -269,6 +271,19 @@ def create_max_client(
 
         if link_type in ("FORWARD", "REPLY"):
             await _handle_linked_message(link, link_type, header_text, client, sender, resolver, tg_user_id, kb=kb)
+            if stats_callback:
+                metric = "forward_dm" if link_type == "FORWARD" and is_dm else None
+                if link_type == "FORWARD" and not is_dm:
+                    metric = "forward_group"
+                if link_type == "REPLY" and is_dm:
+                    metric = "reply_dm"
+                if link_type == "REPLY" and not is_dm:
+                    metric = "reply_group"
+                if metric:
+                    try:
+                        await stats_callback(metric)
+                    except Exception:
+                        log.exception("Failed to write report metric=%s", metric)
             if msg.text:
                 await sender.send(tg_user_id, f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
             log.info("Forwarded link type=%s → TG", link_type)

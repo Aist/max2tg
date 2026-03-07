@@ -60,6 +60,7 @@ async def main():
 
     storage = Storage(settings.db_path)
     await storage.init()
+    await storage.cleanup_daily_metrics_if_needed(keep_days=180)
 
     tg_transport = TelegramSender(settings.tg_bot_token)
     await tg_transport.start()

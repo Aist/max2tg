@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 import aiosqlite
@@ -27,9 +28,19 @@ class TgUserRecord:
     accounts_count: int = 0
 
 
+@dataclass(frozen=True)
+class DailyReportRow:
+    day: str
+    forward_dm: int
+    forward_group: int
+    reply_dm: int
+    reply_group: int
+
+
 class Storage:
     def __init__(self, db_path: str):
         self._db_path = db_path
+        self._last_stats_cleanup_day: str | None = None
 
     async def init(self) -> None:
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
@@ -57,6 +68,19 @@ class Storage:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_report_stats (
+                    day TEXT NOT NULL,
+                    metric TEXT NOT NULL,
+                    cnt INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(day, metric)
+                )
+                """
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_daily_report_stats_day ON daily_report_stats(day)"
             )
             await self._ensure_column(db, "tg_users", "terms_accepted_at", "TEXT")
             # Migrate legacy consents table into tg_users.terms_accepted_at when present.
@@ -316,3 +340,75 @@ class Storage:
             )
             await db.commit()
             return account_ids
+
+    async def increment_daily_metric(self, metric: str, stat_day: str | None = None) -> None:
+        if metric not in {"forward_dm", "forward_group", "reply_dm", "reply_group"}:
+            raise ValueError(f"Unsupported metric: {metric}")
+        day = stat_day or date.today().isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO daily_report_stats(day, metric, cnt)
+                VALUES(?, ?, 1)
+                ON CONFLICT(day, metric) DO UPDATE SET
+                    cnt = cnt + 1
+                """,
+                (day, metric),
+            )
+            await db.commit()
+        await self.cleanup_daily_metrics_if_needed()
+
+    async def cleanup_daily_metrics_if_needed(self, keep_days: int = 180) -> None:
+        keep_days = max(1, keep_days)
+        today = date.today().isoformat()
+        if self._last_stats_cleanup_day == today:
+            return
+        cutoff = (date.today() - timedelta(days=keep_days)).isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                "DELETE FROM daily_report_stats WHERE day < ?",
+                (cutoff,),
+            )
+            await db.commit()
+        self._last_stats_cleanup_day = today
+
+    async def get_daily_report(self, days: int = 10) -> list[DailyReportRow]:
+        days = max(1, min(days, 180))
+        end_day = date.today()
+        start_day = end_day - timedelta(days=days - 1)
+
+        counters: dict[str, dict[str, int]] = {}
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT day, metric, cnt
+                FROM daily_report_stats
+                WHERE day >= ? AND day <= ?
+                ORDER BY day ASC
+                """,
+                (start_day.isoformat(), end_day.isoformat()),
+            )
+            rows = await cur.fetchall()
+        for row in rows:
+            day = str(row["day"])
+            metric = str(row["metric"])
+            cnt = int(row["cnt"])
+            counters.setdefault(day, {})[metric] = cnt
+
+        result: list[DailyReportRow] = []
+        cur_day = start_day
+        while cur_day <= end_day:
+            day_str = cur_day.isoformat()
+            day_metrics = counters.get(day_str, {})
+            result.append(
+                DailyReportRow(
+                    day=day_str,
+                    forward_dm=int(day_metrics.get("forward_dm", 0)),
+                    forward_group=int(day_metrics.get("forward_group", 0)),
+                    reply_dm=int(day_metrics.get("reply_dm", 0)),
+                    reply_group=int(day_metrics.get("reply_group", 0)),
+                )
+            )
+            cur_day += timedelta(days=1)
+        return result

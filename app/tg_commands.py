@@ -100,6 +100,7 @@ def _admin_help() -> str:
         "/activate <tg_user_id> - активировать пользователя\n"
         "/deactivate <tg_user_id> - деактивировать пользователя\n"
         "/users [page] - список пользователей и статусы (по 10)\n"
+        "/reports - статистика репостов/реплаев за 10 дней\n"
         "/register <device_id> <token> [name] - привязать MAX себе\n"
         "/accounts - список ваших MAX аккаунтов\n"
         "/remove <account_id> - отключить вашу привязку\n"
@@ -337,6 +338,32 @@ async def _on_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if page < total_pages:
         rows.append(f"Дальше: /users {page + 1}")
     await update.message.reply_text("\n".join(rows))
+
+
+async def _on_reports(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_private_chat(update):
+        return
+    if not await _ensure_terms_accepted(update, context):
+        return
+    if not _is_admin(update, context):
+        await update.message.reply_text("⚠️ Команда доступна только администратору.")
+        return
+
+    manager: AccountManager = context.bot_data["account_manager"]
+    rows = await manager.get_daily_report(days=10)
+    if not rows:
+        await update.message.reply_text("Данные статистики отсутствуют.")
+        return
+
+    lines = [
+        "Отчет за последние 10 дней:",
+        "дата | репосты ЛС | репосты групп | реплаи ЛС | реплаи групп",
+    ]
+    for row in rows:
+        lines.append(
+            f"{row.day} | {row.forward_dm} | {row.forward_group} | {row.reply_dm} | {row.reply_group}"
+        )
+    await update.message.reply_text("\n".join(lines))
 
 
 async def _on_deactivate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -587,6 +614,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("activate", _on_activate, filters=private_filter))
     app.add_handler(CommandHandler("deactivate", _on_deactivate, filters=private_filter))
     app.add_handler(CommandHandler("users", _on_users, filters=private_filter))
+    app.add_handler(CommandHandler("reports", _on_reports, filters=private_filter))
     app.add_handler(CommandHandler("accounts", _on_accounts, filters=private_filter))
     app.add_handler(CommandHandler("remove", _on_remove, filters=private_filter))
     app.add_handler(CommandHandler("askme", _on_askme, filters=private_filter))
