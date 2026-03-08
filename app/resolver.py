@@ -18,6 +18,7 @@ class ContactResolver:
         self.users: dict[Any, str] = {}
         self._client = client
         self._fetch_failed: set = set()
+        self._chat_fetch_failed: set = set()
         self._my_id: Any = None
 
     def chat_name(self, chat_id: Any) -> str:
@@ -66,6 +67,28 @@ class ContactResolver:
         ]
         if unknown:
             await self._ws_fetch_contacts(unknown)
+
+    async def ensure_chat_meta(self, chat_id: Any) -> None:
+        if chat_id is None or chat_id in self.chats or chat_id in self._chat_fetch_failed:
+            return
+        if not self._client:
+            return
+        try:
+            resp = await self._client.fetch_chat(chat_id)
+            if not resp:
+                self._chat_fetch_failed.add(chat_id)
+                return
+            found = self._find_chat_meta(resp, chat_id, depth=0)
+            if found:
+                title, ctype = found
+                if title:
+                    self.chats[chat_id] = title
+                if ctype:
+                    self.chat_types[chat_id] = ctype
+            else:
+                self._chat_fetch_failed.add(chat_id)
+        except Exception:
+            self._chat_fetch_failed.add(chat_id)
 
     # ── populate from AUTH_SNAPSHOT ────────────────────────────────
 

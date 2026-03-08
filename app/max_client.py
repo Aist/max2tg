@@ -302,7 +302,7 @@ class MaxClient:
             await self._send(
                 OpCode.AUTH_SNAPSHOT,
                 {
-                    "chatsCount": 10,
+                    "chatsCount": 200,
                     "interactive": True,
                     "token": self.token,
                 },
@@ -338,6 +338,17 @@ class MaxClient:
         resp = await self.cmd(OpCode.CONTACT_GET, {"contactIds": contact_ids})
         log.info("fetch_contacts(%s) → keys: %s", contact_ids, list(resp.keys()))
         return resp
+
+    async def fetch_chat(self, chat_id: Any) -> dict:
+        """Fetch chat metadata via WS opcode 48. Returns raw response payload."""
+        if chat_id is None:
+            return {}
+        # Backend schema may vary; try common variants.
+        resp = await self.cmd(OpCode.CHAT_GET, {"chatId": chat_id})
+        if resp:
+            return resp
+        resp = await self.cmd(OpCode.CHAT_GET, {"chatIds": [chat_id]})
+        return resp or {}
 
     async def send_message(self, chat_id, text: str) -> dict:
         """Send a text message to a Max chat. Returns the server response."""

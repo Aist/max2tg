@@ -258,13 +258,14 @@ def create_max_client(
             return
 
         resolver.update_chat_from_event(msg.raw, msg.chat_id)
+        await resolver.ensure_chat_meta(msg.chat_id)
         sender_name = await resolver.resolve_user(msg.sender_id)
         sender_label = escape(sender_name if sender_name and sender_name != "None" else "Неизвестный")
         is_dm = resolver.is_dm(msg.chat_id)
         chat_label = escape(resolver.chat_name(msg.chat_id))
         header_text = _header(msg, sender_label, chat_label, is_dm)
         if account_label:
-            header_text = f"🧩 <b>{escape(account_label)}</b>\n{header_text}"
+            header_text = f"👾 <b>{escape(account_label)}</b>\n{header_text}"
         kb = reply_keyboard(account_id, msg.chat_id, is_dm) if reply_enabled else None
 
         if stats_callback:
