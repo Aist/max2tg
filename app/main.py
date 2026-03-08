@@ -9,6 +9,7 @@ import redis.asyncio as redis
 from app.account_manager import AccountManager
 from app.config import load_settings
 from app.cooldown_store import MemoryCooldownStore
+from app.health_monitor import AppLogHealthMonitor
 from app.maintenance import configure_logging, weekly_backup_loop
 from app.message_queue import QueuedTelegramSender
 from app.storage import Storage
@@ -64,6 +65,14 @@ async def main():
 
     tg_transport = TelegramSender(settings.tg_bot_token)
     await tg_transport.start()
+    health_monitor = AppLogHealthMonitor(bot=tg_transport.bot, admin_id=settings.tg_admin_id)
+    health_monitor.install()
+    health_stop_event = asyncio.Event()
+    health_task = asyncio.create_task(
+        health_monitor.daily_check_loop(health_stop_event),
+        name="daily-app-log-health-check",
+    )
+
     sender = QueuedTelegramSender(
         sender=tg_transport,
         redis_url=settings.redis_url,
@@ -123,6 +132,10 @@ async def main():
             await asyncio.sleep(3600)
     finally:
         log.info("Shutting down...")
+        health_stop_event.set()
+        health_task.cancel()
+        await asyncio.gather(health_task, return_exceptions=True)
+        health_monitor.uninstall()
         backup_stop_event.set()
         backup_task.cancel()
         await asyncio.gather(backup_task, return_exceptions=True)
