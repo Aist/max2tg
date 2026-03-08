@@ -76,7 +76,9 @@ def configure_logging(debug: bool) -> None:
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING if not debug else logging.DEBUG)
+    # Never log Telegram request payloads (can include message text/captions), even in DEBUG mode.
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 
 def _backup_db_sync(db_path: str, backup_path: str) -> None:

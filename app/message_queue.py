@@ -37,11 +37,13 @@ class _RedisQueueBackend:
         self,
         redis_url: str,
         key_prefix: str = "max2tg",
+        job_ttl_sec: int = 300,
     ):
         self._redis_url = redis_url
         safe_prefix = (key_prefix or "max2tg").strip(":")
         self._queue_key = f"{safe_prefix}:tg:queue"
         self._processing_key = f"{safe_prefix}:tg:queue:processing"
+        self._job_ttl_sec = max(30, int(job_ttl_sec))
         self._redis = None
 
     async def start(self) -> None:
@@ -72,7 +74,11 @@ class _RedisQueueBackend:
                 timeout=1,
             )
             if payload:
-                return pickle.loads(payload), payload
+                job = pickle.loads(payload)
+                if self._is_expired(job):
+                    await self._redis.lrem(self._processing_key, 1, payload)
+                    continue
+                return job, payload
 
     def task_done(self, token: bytes) -> None:
         if token:
@@ -80,6 +86,9 @@ class _RedisQueueBackend:
 
     async def fail(self, token: bytes, retry_job: dict[str, Any] | None, delay_sec: float) -> None:
         if retry_job is None:
+            await self._redis.lrem(self._processing_key, 1, token)
+            return
+        if self._is_expired(retry_job):
             await self._redis.lrem(self._processing_key, 1, token)
             return
         if delay_sec > 0:
@@ -96,9 +105,19 @@ class _RedisQueueBackend:
             payload = await self._redis.rpoplpush(self._processing_key, self._queue_key)
             if payload is None:
                 break
+            job = pickle.loads(payload)
+            if self._is_expired(job):
+                await self._redis.lrem(self._queue_key, 1, payload)
+                continue
             moved += 1
         if moved:
             log.warning("Recovered %d unacked Telegram queue jobs from processing", moved)
+
+    def _is_expired(self, job: dict[str, Any]) -> bool:
+        enqueued_at = float(job.get("enqueued_at", 0.0))
+        if enqueued_at <= 0:
+            return False
+        return (time.time() - enqueued_at) > self._job_ttl_sec
 
 
 class QueuedTelegramSender:
@@ -111,12 +130,14 @@ class QueuedTelegramSender:
         min_send_interval_ms: int = 80,
         max_attempts: int = 3,
         retry_delays_sec: list[float] | None = None,
+        job_ttl_sec: int = 300,
     ):
         self._sender = sender
         self._workers_count = max(1, workers)
         self._min_send_interval = max(0.0, min_send_interval_ms / 1000.0)
         self._max_attempts = max(1, max_attempts)
         self._retry_delays = retry_delays_sec or [2.0, 5.0, 10.0]
+        self._job_ttl_sec = max(30, int(job_ttl_sec))
         self._stop_event = asyncio.Event()
         self._workers: list[asyncio.Task] = []
         self._rate_lock = asyncio.Lock()
@@ -124,7 +145,11 @@ class QueuedTelegramSender:
         self._backend = _LocalQueueBackend()
         self._redis_backend = None
         if redis_url:
-            self._redis_backend = _RedisQueueBackend(redis_url, key_prefix=redis_key_prefix)
+            self._redis_backend = _RedisQueueBackend(
+                redis_url,
+                key_prefix=redis_key_prefix,
+                job_ttl_sec=self._job_ttl_sec,
+            )
             self._backend = self._redis_backend
 
     async def start(self) -> None:
@@ -153,7 +178,7 @@ class QueuedTelegramSender:
             await self._redis_backend.stop()
 
     async def _enqueue(self, method: str, **kwargs) -> None:
-        job = {"method": method, "kwargs": kwargs, "attempt": 0}
+        job = {"method": method, "kwargs": kwargs, "attempt": 0, "enqueued_at": time.time()}
         await self._backend.put(job)
 
     async def _rate_limit(self) -> None:

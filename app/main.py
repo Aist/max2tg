@@ -71,6 +71,7 @@ async def main():
         workers=settings.tg_queue_workers,
         min_send_interval_ms=settings.tg_min_send_interval_ms,
         max_attempts=settings.tg_queue_max_attempts,
+        job_ttl_sec=settings.tg_queue_job_ttl_sec,
     )
     await sender.start()
 

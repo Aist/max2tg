@@ -43,6 +43,8 @@ class ContactResolver:
             self.chat_types[chat_id] = ctype
 
     async def resolve_user(self, user_id: Any) -> str:
+        if user_id is None:
+            return "Неизвестный"
         if user_id in self.users:
             return self.users[user_id]
         if user_id in self._fetch_failed:
@@ -57,7 +59,11 @@ class ContactResolver:
 
     async def resolve_users_batch(self, user_ids: list) -> None:
         """Pre-fetch a batch of unknown user IDs in one WS call."""
-        unknown = [uid for uid in user_ids if uid not in self.users and uid not in self._fetch_failed]
+        unknown = [
+            uid
+            for uid in user_ids
+            if uid is not None and uid not in self.users and uid not in self._fetch_failed
+        ]
         if unknown:
             await self._ws_fetch_contacts(unknown)
 
@@ -115,8 +121,11 @@ class ContactResolver:
     async def _ws_fetch_contacts(self, user_ids: list) -> None:
         if not self._client:
             return
+        valid_ids = [uid for uid in user_ids if isinstance(uid, int)]
+        if not valid_ids:
+            return
         try:
-            resp = await self._client.fetch_contacts(user_ids)
+            resp = await self._client.fetch_contacts(valid_ids)
             self._parse_contacts_response(resp)
         except Exception:
             log.exception("Failed to fetch contacts via WS")

@@ -80,6 +80,7 @@ cp .env.example .env
 | `TG_QUEUE_WORKERS` | нет | Количество воркеров отправки в TG |
 | `TG_MIN_SEND_INTERVAL_MS` | нет | Минимальный интервал между отправками (мс) |
 | `TG_QUEUE_MAX_ATTEMPTS` | нет | Количество попыток отправки через очередь |
+| `TG_QUEUE_JOB_TTL_SEC` | нет | TTL задания очереди отправки (сек, по умолчанию `300`) |
 | `DEBUG` | нет | `true` — подробные логи |
 | `REPLY_ENABLED` | нет | `true` — разрешить ответы из Telegram в Max |
 | `MAX_TOKEN` | нет | legacy bootstrap для авто-регистрации первого аккаунта |
@@ -335,6 +336,7 @@ cp .env.example .env
 | `TG_QUEUE_WORKERS` | no | Number of TG sender workers |
 | `TG_MIN_SEND_INTERVAL_MS` | no | Minimum delay between sends (ms) |
 | `TG_QUEUE_MAX_ATTEMPTS` | no | Number of queue send attempts |
+| `TG_QUEUE_JOB_TTL_SEC` | no | Outbound queue job TTL in seconds (default `300`) |
 | `DEBUG` | no | `true` — verbose logs |
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
 | `MAX_TOKEN` | no | legacy bootstrap for first account |

@@ -117,8 +117,8 @@ class MaxClient:
             "payload": payload,
         }
         self._seq += 1
+        log.debug(">>> SEND op=%d seq=%d", opcode, seq)
         raw = json.dumps(pkt, ensure_ascii=False)
-        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, raw[:800])
         await self._ws.send_str(raw)
         return seq
 
@@ -231,11 +231,9 @@ class MaxClient:
             fut = self._pending.pop(seq)
             if not fut.done():
                 fut.set_result({})
-            log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, payload)
-
-        payload_preview = json.dumps(payload, ensure_ascii=False)
-        if len(payload_preview) > 3000:
-            payload_preview = payload_preview[:3000] + "…"
+            err_code = payload.get("error") if isinstance(payload, dict) else None
+            err_title = payload.get("title") if isinstance(payload, dict) else None
+            log.warning("<<< ERROR op=%-4s seq=%s error=%s title=%s", op, seq, err_code, err_title)
 
         if op == OpCode.HANDSHAKE and cmd == 1:
             log.info("Handshake OK → sending auth token...")
@@ -267,7 +265,7 @@ class MaxClient:
             log.debug("Heartbeat op=%s", op)
 
         elif cmd not in (1, 3):
-            log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, payload_preview[:500])
+            log.info("<<< EVENT op=%-4s cmd=%-3s", op, cmd)
 
     # ── WebSocket RPC: fetch contacts ──────────────────────────────
 
