@@ -1,93 +1,12 @@
-import logging
+from telegram.ext import Application
 
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
-
-from app.max_client import MaxClient
-
-log = logging.getLogger(__name__)
-
-PENDING_REPLY_KEY = "pending_reply_chat_id"
-PENDING_REPLY_LABEL_KEY = "pending_reply_label"
+from app.account_manager import AccountManager
+from app.tg_commands import register_handlers
 
 
-async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline 'Reply' button press."""
-    query = update.callback_query
-    await query.answer()
-
-    data = query.data or ""
-    if not data.startswith("reply:"):
-        return
-
-    chat_id_str = data[len("reply:"):]
-    try:
-        max_chat_id = int(chat_id_str)
-    except ValueError:
-        max_chat_id = chat_id_str
-
-    context.user_data[PENDING_REPLY_KEY] = max_chat_id
-
-    source_text = query.message.text or query.message.caption or ""
-    label = source_text.split("\n")[0] if source_text else str(max_chat_id)
-    context.user_data[PENDING_REPLY_LABEL_KEY] = label
-
-    await query.message.reply_text(
-        f"✏️ Напишите ответ для <b>{label}</b>:\n"
-        "<i>(или /cancel для отмены)</i>",
-        parse_mode="HTML",
-    )
-
-
-async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Cancel pending reply."""
-    if context.user_data.pop(PENDING_REPLY_KEY, None):
-        context.user_data.pop(PENDING_REPLY_LABEL_KEY, None)
-        await update.message.reply_text("❌ Ответ отменён.")
-    else:
-        await update.message.reply_text("Нет активного ответа для отмены.")
-
-
-async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Forward user's text as a reply to Max."""
-    max_chat_id = context.user_data.pop(PENDING_REPLY_KEY, None)
-    label = context.user_data.pop(PENDING_REPLY_LABEL_KEY, None)
-    if max_chat_id is None:
-        return
-
-    max_client: MaxClient | None = context.bot_data.get("max_client")
-    if not max_client:
-        await update.message.reply_text("⚠️ Max клиент не подключён.")
-        return
-
-    text = update.message.text
-    try:
-        resp = await max_client.send_message(max_chat_id, text)
-        if resp:
-            await update.message.reply_text(f"✅ Отправлено → <b>{label or max_chat_id}</b>", parse_mode="HTML")
-        else:
-            await update.message.reply_text("⚠️ Не удалось отправить сообщение в Max.")
-    except Exception:
-        log.exception("Failed to send reply to Max chat %s", max_chat_id)
-        await update.message.reply_text("⚠️ Ошибка при отправке в Max.")
-
-
-def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str) -> Application:
-    """Build and configure the Telegram Application with handlers."""
+def build_tg_app(token: str, account_manager: AccountManager, admin_id: int) -> Application:
     app = Application.builder().token(token).build()
-    app.bot_data["max_client"] = max_client
-
-    chat_filter = filters.Chat(chat_id=int(allowed_chat_id))
-
-    app.add_handler(CallbackQueryHandler(_on_reply_button, pattern=r"^reply:"))
-    app.add_handler(CommandHandler("cancel", _on_cancel, filters=chat_filter))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & chat_filter, _on_text_reply))
-
+    app.bot_data["account_manager"] = account_manager
+    app.bot_data["admin_id"] = int(admin_id)
+    register_handlers(app)
     return app

@@ -1,5 +1,6 @@
 import logging
 from html import escape
+from typing import Awaitable, Callable
 
 from app.max_client import MaxClient, MaxMessage
 from app.resolver import ContactResolver
@@ -11,10 +12,11 @@ PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
-def _header(msg: MaxMessage, sender_label: str, chat_label: str, is_dm: bool) -> str:
+def _header(sender_label: str, chat_label: str, is_dm: bool, account_label: str = "") -> str:
+    account_part = f"👾 <b>{escape(account_label)}</b>" if account_label else ""
     if is_dm:
-        return f"✉ <b>{sender_label}</b>"
-    return f"💬 <b>{chat_label}</b> | {sender_label}"
+        return f"{account_part} | {sender_label}" if account_part else sender_label
+    return f"{account_part} 💬 <b>{chat_label}</b> | {sender_label}" if account_part else f"💬 <b>{chat_label}</b> | {sender_label}"
 
 
 def _extract_photo_url(attach: dict) -> str | None:
@@ -45,6 +47,7 @@ async def _send_attach(
     attach: dict,
     client: MaxClient,
     sender: TelegramSender,
+    tg_user_id: int,
     header_text: str,
     kb=None,
 ) -> bool:
@@ -62,9 +65,9 @@ async def _send_attach(
             return False
         data = await client.download_file(url)
         if data:
-            await sender.send_photo(data, caption=header_text, reply_markup=kb)
+            await sender.send_photo(tg_user_id, data, caption=header_text, reply_markup=kb)
             return True
-        await sender.send(f"{header_text}\n<i>[фото — не удалось загрузить]</i>", reply_markup=kb)
+        await sender.send(tg_user_id, f"{header_text}\n<i>[фото — не удалось загрузить]</i>", reply_markup=kb)
         return True
 
     if atype == "VIDEO":
@@ -72,9 +75,11 @@ async def _send_attach(
         if thumb:
             data = await client.download_file(thumb)
             if data:
-                await sender.send_photo(data, caption=f"{header_text}\n<i>[видео — превью]</i>", reply_markup=kb)
+                await sender.send_photo(
+                    tg_user_id, data, caption=f"{header_text}\n<i>[видео — превью]</i>", reply_markup=kb
+                )
                 return True
-        await sender.send(f"{header_text}\n<i>[видео]</i>", reply_markup=kb)
+        await sender.send(tg_user_id, f"{header_text}\n<i>[видео]</i>", reply_markup=kb)
         return True
 
     if atype == "FILE":
@@ -86,14 +91,14 @@ async def _send_attach(
             if data:
                 kind = _guess_media_kind(name)
                 if kind == "photo":
-                    await sender.send_photo(data, caption=header_text, filename=name, reply_markup=kb)
+                    await sender.send_photo(tg_user_id, data, caption=header_text, filename=name, reply_markup=kb)
                 elif kind == "video":
-                    await sender.send_video(data, caption=header_text, filename=name, reply_markup=kb)
+                    await sender.send_video(tg_user_id, data, caption=header_text, filename=name, reply_markup=kb)
                 else:
-                    await sender.send_document(data, caption=header_text, filename=name, reply_markup=kb)
+                    await sender.send_document(tg_user_id, data, caption=header_text, filename=name, reply_markup=kb)
                 return True
         size_str = f" ({_human_size(size)})" if size else ""
-        await sender.send(f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", reply_markup=kb)
+        await sender.send(tg_user_id, f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", reply_markup=kb)
         return True
 
     if atype == "AUDIO":
@@ -101,9 +106,9 @@ async def _send_attach(
         if url:
             data = await client.download_file(url)
             if data:
-                await sender.send_voice(data, caption=header_text, reply_markup=kb)
+                await sender.send_voice(tg_user_id, data, caption=header_text, reply_markup=kb)
                 return True
-        await sender.send(f"{header_text}\n<i>[аудио]</i>", reply_markup=kb)
+        await sender.send(tg_user_id, f"{header_text}\n<i>[аудио]</i>", reply_markup=kb)
         return True
 
     if atype == "STICKER":
@@ -111,9 +116,9 @@ async def _send_attach(
         if url:
             data = await client.download_file(url)
             if data:
-                await sender.send_sticker(data, reply_markup=kb)
+                await sender.send_sticker(tg_user_id, data, reply_markup=kb)
                 return True
-        await sender.send(f"{header_text}\n<i>[стикер]</i>", reply_markup=kb)
+        await sender.send(tg_user_id, f"{header_text}\n<i>[стикер]</i>", reply_markup=kb)
         return True
 
     if atype == "SHARE":
@@ -127,16 +132,16 @@ async def _send_attach(
             parts.append(escape(share_url))
         if desc:
             parts.append(f"<i>{escape(desc[:200])}</i>")
-        await sender.send("\n".join(parts), reply_markup=kb)
+        await sender.send(tg_user_id, "\n".join(parts), reply_markup=kb)
         return True
 
     if atype == "LOCATION":
         lat = attach.get("lat") or attach.get("latitude")
         lon = attach.get("lon") or attach.get("lng") or attach.get("longitude")
         if lat and lon:
-            await sender.send(f"{header_text}\n📍 {lat}, {lon}", reply_markup=kb)
+            await sender.send(tg_user_id, f"{header_text}\n📍 {lat}, {lon}", reply_markup=kb)
         else:
-            await sender.send(f"{header_text}\n<i>[геолокация]</i>", reply_markup=kb)
+            await sender.send(tg_user_id, f"{header_text}\n<i>[геолокация]</i>", reply_markup=kb)
         return True
 
     if atype == "CONTACT":
@@ -145,11 +150,11 @@ async def _send_attach(
         text = f"{header_text}\n👤 {escape(name)}"
         if phone:
             text += f" — {escape(phone)}"
-        await sender.send(text, reply_markup=kb)
+        await sender.send(tg_user_id, text, reply_markup=kb)
         return True
 
     log.info("Unknown attach type %s, sending as info", atype)
-    await sender.send(f"{header_text}\n<i>[вложение: {escape(atype or 'unknown')}]</i>", reply_markup=kb)
+    await sender.send(tg_user_id, f"{header_text}\n<i>[вложение: {escape(atype or 'unknown')}]</i>", reply_markup=kb)
     return True
 
 
@@ -160,6 +165,7 @@ async def _handle_linked_message(
     client: MaxClient,
     sender: TelegramSender,
     resolver: ContactResolver,
+    tg_user_id: int,
     kb=None,
 ) -> None:
     """Handle FORWARD or REPLY link inside a message."""
@@ -196,14 +202,14 @@ async def _handle_linked_message(
                 text_sent = True
             else:
                 cap = full_header
-            await _send_attach(attach, client, sender, cap, kb=kb)
+            await _send_attach(attach, client, sender, tg_user_id, cap, kb=kb)
 
         if fwd_text and not text_sent:
-            await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
+            await sender.send(tg_user_id, f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
     elif fwd_text:
-        await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
+        await sender.send(tg_user_id, f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
     else:
-        await sender.send(f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb)
+        await sender.send(tg_user_id, f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb)
 
 
 def _human_size(n: int) -> str:
@@ -215,7 +221,13 @@ def _human_size(n: int) -> str:
 
 
 def create_max_client(
-    max_token: str, max_device_id: str, sender: TelegramSender,
+    account_id: int,
+    tg_user_id: int,
+    max_token: str,
+    max_device_id: str,
+    sender: TelegramSender,
+    stats_callback: Callable[[str], Awaitable[None]] | None = None,
+    account_label: str = "",
     debug: bool = False, reply_enabled: bool = False,
 ) -> MaxClient:
     client = MaxClient(token=max_token, device_id=max_device_id, debug=debug)
@@ -236,30 +248,39 @@ def create_max_client(
     @client.on_message
     async def handle_message(msg: MaxMessage):
         log.info(
-            "New message: chat=%s sender=%s is_self=%s text=%r attaches=%d",
+            "New message: chat=%s sender=%s is_self=%s attaches=%d",
             msg.chat_id,
             msg.sender_id,
             msg.is_self,
-            (msg.text[:80] + "…") if len(msg.text) > 80 else msg.text,
             len(msg.attaches),
         )
 
         if msg.is_self:
             return
 
-        sender_label = escape(await resolver.resolve_user(msg.sender_id))
+        resolver.update_chat_from_event(msg.raw, msg.chat_id)
+        await resolver.ensure_chat_meta(msg.chat_id)
+        sender_name = await resolver.resolve_user(msg.sender_id)
+        sender_label = escape(sender_name if sender_name and sender_name != "None" else "Неизвестный")
         is_dm = resolver.is_dm(msg.chat_id)
         chat_label = escape(resolver.chat_name(msg.chat_id))
-        header_text = _header(msg, sender_label, chat_label, is_dm)
-        kb = reply_keyboard(msg.chat_id) if reply_enabled else None
+        header_text = _header(sender_label, chat_label, is_dm, account_label=account_label)
+        kb = reply_keyboard(account_id, msg.chat_id, is_dm) if reply_enabled else None
+
+        if stats_callback:
+            incoming_metric = "forward_dm" if is_dm else "forward_group"
+            try:
+                await stats_callback(incoming_metric)
+            except Exception:
+                log.exception("Failed to write report metric=%s", incoming_metric)
 
         link = msg.link
         link_type = link.get("type") if isinstance(link, dict) else None
 
         if link_type in ("FORWARD", "REPLY"):
-            await _handle_linked_message(link, link_type, header_text, client, sender, resolver, kb=kb)
+            await _handle_linked_message(link, link_type, header_text, client, sender, resolver, tg_user_id, kb=kb)
             if msg.text:
-                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
+                await sender.send(tg_user_id, f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
             log.info("Forwarded link type=%s → TG", link_type)
             return
 
@@ -276,14 +297,14 @@ def create_max_client(
                     text_sent = True
                 else:
                     cap = header_text
-                await _send_attach(attach, client, sender, cap, kb=kb)
+                await _send_attach(attach, client, sender, tg_user_id, cap, kb=kb)
                 log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
 
             if msg.text and not text_sent:
-                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
+                await sender.send(tg_user_id, f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
         else:
             body = escape(msg.text) if msg.text else "<i>[нетекстовое сообщение]</i>"
-            await sender.send(f"{header_text}\n{body}", reply_markup=kb)
+            await sender.send(tg_user_id, f"{header_text}\n{body}", reply_markup=kb)
             log.info("Forwarded text → TG")
 
     return client

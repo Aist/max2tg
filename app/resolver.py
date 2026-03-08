@@ -18,18 +18,38 @@ class ContactResolver:
         self.users: dict[Any, str] = {}
         self._client = client
         self._fetch_failed: set = set()
+        self._chat_fetch_failed: set = set()
         self._my_id: Any = None
 
     def chat_name(self, chat_id: Any) -> str:
         return self.chats.get(chat_id, str(chat_id))
 
     def is_dm(self, chat_id: Any) -> bool:
-        return self.chat_types.get(chat_id) == "DIALOG"
+        ctype = self.chat_types.get(chat_id)
+        if ctype == "DIALOG":
+            return True
+        # Fallback when chat meta is not resolved yet.
+        return isinstance(chat_id, int) and chat_id > 0
 
     def user_name(self, user_id: Any) -> str:
         return self.users.get(user_id, str(user_id))
 
+    def update_chat_from_event(self, payload: dict, chat_id: Any) -> None:
+        """Best-effort update of chat title/type from incoming DISPATCH payload."""
+        if chat_id is None or not isinstance(payload, dict):
+            return
+        found = self._find_chat_meta(payload, chat_id, depth=0)
+        if not found:
+            return
+        title, ctype = found
+        if title:
+            self.chats[chat_id] = title
+        if ctype:
+            self.chat_types[chat_id] = ctype
+
     async def resolve_user(self, user_id: Any) -> str:
+        if user_id is None:
+            return "Неизвестный"
         if user_id in self.users:
             return self.users[user_id]
         if user_id in self._fetch_failed:
@@ -44,9 +64,35 @@ class ContactResolver:
 
     async def resolve_users_batch(self, user_ids: list) -> None:
         """Pre-fetch a batch of unknown user IDs in one WS call."""
-        unknown = [uid for uid in user_ids if uid not in self.users and uid not in self._fetch_failed]
+        unknown = [
+            uid
+            for uid in user_ids
+            if uid is not None and uid not in self.users and uid not in self._fetch_failed
+        ]
         if unknown:
             await self._ws_fetch_contacts(unknown)
+
+    async def ensure_chat_meta(self, chat_id: Any) -> None:
+        if chat_id is None or chat_id in self.chats or chat_id in self._chat_fetch_failed:
+            return
+        if not self._client:
+            return
+        try:
+            resp = await self._client.fetch_chat(chat_id)
+            if not resp:
+                self._chat_fetch_failed.add(chat_id)
+                return
+            found = self._find_chat_meta(resp, chat_id, depth=0)
+            if found:
+                title, ctype = found
+                if title:
+                    self.chats[chat_id] = title
+                if ctype:
+                    self.chat_types[chat_id] = ctype
+            else:
+                self._chat_fetch_failed.add(chat_id)
+        except Exception:
+            self._chat_fetch_failed.add(chat_id)
 
     # ── populate from AUTH_SNAPSHOT ────────────────────────────────
 
@@ -102,8 +148,11 @@ class ContactResolver:
     async def _ws_fetch_contacts(self, user_ids: list) -> None:
         if not self._client:
             return
+        valid_ids = [uid for uid in user_ids if isinstance(uid, int)]
+        if not valid_ids:
+            return
         try:
-            resp = await self._client.fetch_contacts(user_ids)
+            resp = await self._client.fetch_contacts(valid_ids)
             self._parse_contacts_response(resp)
         except Exception:
             log.exception("Failed to fetch contacts via WS")
@@ -151,6 +200,33 @@ class ContactResolver:
         elif isinstance(obj, list):
             for item in obj:
                 self._deep_extract(item, depth + 1)
+
+    def _find_chat_meta(self, obj: Any, chat_id: Any, depth: int) -> tuple[str | None, str | None] | None:
+        if depth > 6:
+            return None
+        if isinstance(obj, dict):
+            id_candidates = [obj.get("id"), obj.get("chatId"), obj.get("chat_id")]
+            for cand in id_candidates:
+                if cand == chat_id:
+                    title = (
+                        obj.get("title")
+                        or obj.get("chatTitle")
+                        or obj.get("name")
+                        or obj.get("displayName")
+                    )
+                    ctype = obj.get("type") or obj.get("chatType")
+                    if title or ctype:
+                        return (str(title) if title else None, str(ctype) if ctype else None)
+            for value in obj.values():
+                found = self._find_chat_meta(value, chat_id, depth + 1)
+                if found:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = self._find_chat_meta(item, chat_id, depth + 1)
+                if found:
+                    return found
+        return None
 
     @staticmethod
     def _extract_name_from_contact(c: dict) -> str:

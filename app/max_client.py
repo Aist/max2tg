@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -11,8 +10,6 @@ from typing import Any
 import aiohttp
 
 log = logging.getLogger(__name__)
-
-DEBUG_DIR = "debug"
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -45,6 +42,68 @@ _HTTP_HEADERS = {
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "cross-site",
 }
+
+
+async def validate_max_credentials(token: str, device_id: str, timeout_sec: float = 12.0) -> bool:
+    """Validate Max credentials by performing WS handshake + auth snapshot."""
+    if not token or not device_id:
+        return False
+    seq = 0
+    deadline = time.monotonic() + max(3.0, float(timeout_sec))
+    auth_sent = False
+    try:
+        async with aiohttp.ClientSession(headers=_BROWSER_HEADERS) as session:
+            async with session.ws_connect(MaxClient.WS_URL, headers=_WS_HEADERS, ssl=False) as ws:
+                async def _send(opcode: int, payload: dict) -> None:
+                    nonlocal seq
+                    pkt = {
+                        "ver": 11,
+                        "cmd": 0,
+                        "seq": seq,
+                        "opcode": opcode,
+                        "payload": payload,
+                    }
+                    seq += 1
+                    await ws.send_str(json.dumps(pkt, ensure_ascii=False))
+
+                await _send(
+                    OpCode.HANDSHAKE,
+                    {
+                        "deviceId": device_id,
+                        "userAgent": {
+                            "deviceType": "WEB",
+                            "deviceName": "Chrome 131.0.0.0",
+                        },
+                        "appVersion": "25.12.11",
+                    },
+                )
+
+                while time.monotonic() < deadline:
+                    timeout_left = max(0.2, deadline - time.monotonic())
+                    msg = await ws.receive(timeout=timeout_left)
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        return False
+                    data = json.loads(msg.data)
+                    op = data.get("opcode")
+                    cmd = data.get("cmd")
+                    if op == OpCode.HANDSHAKE and cmd == 1 and not auth_sent:
+                        await _send(
+                            OpCode.AUTH_SNAPSHOT,
+                            {
+                                "chatsCount": 1,
+                                "interactive": False,
+                                "token": token,
+                            },
+                        )
+                        auth_sent = True
+                        continue
+                    if op == OpCode.AUTH_SNAPSHOT and cmd == 1:
+                        return True
+                    if op == OpCode.AUTH_SNAPSHOT and cmd == 3:
+                        return False
+    except Exception:
+        return False
+    return False
 
 
 class OpCode(IntEnum):
@@ -94,6 +153,7 @@ class MaxClient:
         self._session: aiohttp.ClientSession | None = None
         self._dispatch_counter = 0
         self._pending: dict[int, asyncio.Future] = {}
+        self._stop_event = asyncio.Event()
 
     # ── decorator API ──────────────────────────────────────────────
 
@@ -119,8 +179,8 @@ class MaxClient:
             "payload": payload,
         }
         self._seq += 1
+        log.debug(">>> SEND op=%d seq=%d", opcode, seq)
         raw = json.dumps(pkt, ensure_ascii=False)
-        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, raw[:800])
         await self._ws.send_str(raw)
         return seq
 
@@ -152,12 +212,9 @@ class MaxClient:
     # ── main loop ──────────────────────────────────────────────────
 
     async def run(self):
-        if self.debug:
-            os.makedirs(DEBUG_DIR, exist_ok=True)
-
         async with aiohttp.ClientSession(headers=_BROWSER_HEADERS) as session:
             self._session = session
-            while True:
+            while not self._stop_event.is_set():
                 try:
                     log.info("Connecting to %s ...", self.WS_URL)
                     async with session.ws_connect(
@@ -205,8 +262,15 @@ class MaxClient:
                             fut.cancel()
                     self._pending.clear()
 
+                if self._stop_event.is_set():
+                    break
                 log.info("Reconnecting in %ds...", self.RECONNECT_SEC)
                 await asyncio.sleep(self.RECONNECT_SEC)
+
+    async def stop(self) -> None:
+        self._stop_event.set()
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
 
     # ── event dispatcher ───────────────────────────────────────────
 
@@ -229,11 +293,9 @@ class MaxClient:
             fut = self._pending.pop(seq)
             if not fut.done():
                 fut.set_result({})
-            log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, payload)
-
-        payload_preview = json.dumps(payload, ensure_ascii=False)
-        if len(payload_preview) > 3000:
-            payload_preview = payload_preview[:3000] + "…"
+            err_code = payload.get("error") if isinstance(payload, dict) else None
+            err_title = payload.get("title") if isinstance(payload, dict) else None
+            log.warning("<<< ERROR op=%-4s seq=%s error=%s title=%s", op, seq, err_code, err_title)
 
         if op == OpCode.HANDSHAKE and cmd == 1:
             log.info("Handshake OK → sending auth token...")
@@ -249,18 +311,17 @@ class MaxClient:
         elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
             self._my_id = payload.get("profile", {}).get("id")
             log.info("Authorized! my_id=%s", self._my_id)
-            if self.debug:
-                self._dump_json("snapshot.json", payload)
 
             if self._on_ready_cb:
                 await self._on_ready_cb(payload)
 
+        elif op == OpCode.AUTH_SNAPSHOT and cmd == 3:
+            err_code = payload.get("error") if isinstance(payload, dict) else None
+            err_title = payload.get("title") if isinstance(payload, dict) else None
+            log.warning("Auth failed: error=%s title=%s", err_code, err_title)
+
         elif op == OpCode.DISPATCH:
             self._dispatch_counter += 1
-            if self.debug and self._dispatch_counter <= 20:
-                self._dump_json(
-                    f"dispatch_{self._dispatch_counter:04d}.json", payload
-                )
 
             if self._on_message_cb:
                 msg = self._parse_message(payload)
@@ -271,7 +332,7 @@ class MaxClient:
             log.debug("Heartbeat op=%s", op)
 
         elif cmd not in (1, 3):
-            log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, payload_preview[:500])
+            log.info("<<< EVENT op=%-4s cmd=%-3s", op, cmd)
 
     # ── WebSocket RPC: fetch contacts ──────────────────────────────
 
@@ -280,9 +341,19 @@ class MaxClient:
         if not contact_ids:
             return {}
         resp = await self.cmd(OpCode.CONTACT_GET, {"contactIds": contact_ids})
-        self._dump_json("contacts_response.json", resp)
         log.info("fetch_contacts(%s) → keys: %s", contact_ids, list(resp.keys()))
         return resp
+
+    async def fetch_chat(self, chat_id: Any) -> dict:
+        """Fetch chat metadata via WS opcode 48. Returns raw response payload."""
+        if chat_id is None:
+            return {}
+        # Backend schema may vary; try common variants.
+        resp = await self.cmd(OpCode.CHAT_GET, {"chatId": chat_id})
+        if resp:
+            return resp
+        resp = await self.cmd(OpCode.CHAT_GET, {"chatIds": [chat_id]})
+        return resp or {}
 
     async def send_message(self, chat_id, text: str) -> dict:
         """Send a text message to a Max chat. Returns the server response."""
@@ -345,14 +416,3 @@ class MaxClient:
 
         return msg
 
-    # ── debug helpers ──────────────────────────────────────────────
-
-    @staticmethod
-    def _dump_json(filename: str, data: dict) -> None:
-        path = os.path.join(DEBUG_DIR, filename)
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            log.info("Dumped %s (%d bytes)", path, os.path.getsize(path))
-        except Exception:
-            log.exception("Failed to dump %s", path)

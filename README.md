@@ -23,8 +23,13 @@
 - Пересылка текстовых сообщений, фото, видео, файлов, аудио, стикеров, контактов, геолокаций и ссылок
 - Поддержка пересланных и цитируемых сообщений (forward / reply)
 - Разное оформление для личных и групповых чатов
-- Ответ из Telegram обратно в Max (опционально, через inline-кнопку)
+- Ответ из Telegram обратно в Max (inline-кнопка, маршрутизация по нужному аккаунту)
 - Работает как userbot — подключается к вашему аккаунту Max через WebSocket
+- Поддержка нескольких MAX-аккаунтов одновременно
+- Легковесное хранение только реквизитов подключения и связки с Telegram-пользователем (SQLite)
+- Ротация логов: 1MB на файл, до 3 архивов
+- Еженедельный backup SQLite (хранится 4 последних копии)
+- Очередь отправки в Telegram с воркерами и опциональным Redis backend для большого потока
 - Docker-ready: разворачивается одной командой
 
 ## Требования
@@ -66,12 +71,35 @@ cp .env.example .env
 
 | Переменная | Обязательная | Описание |
 |---|---|---|
-| `MAX_TOKEN` | да | Токен авторизации Max |
-| `MAX_DEVICE_ID` | да | ID устройства Max |
 | `TG_BOT_TOKEN` | да | Токен Telegram-бота |
-| `TG_CHAT_ID` | да | ID чата, куда пересылать сообщения |
-| `DEBUG` | нет | `true` — подробные логи + дамп JSON в `debug/` |
+| `TG_ADMIN_ID` | да | Telegram ID администратора бота |
+| `ENCRYPTION_KEY` | да | Секрет для шифрования `max_token` и `max_device_id` в SQLite |
+| `DB_PATH` | нет | Путь к SQLite БД (по умолчанию `data/max2tg.sqlite3`) |
+| `REDIS_URL` | нет | URL Redis для внешней очереди отправки (по умолчанию `redis://127.0.0.1:6379/0`; при недоступности fallback в память) |
+| `REDIS_KEY_PREFIX` | нет | Глобальный префикс ключей Redis (по умолчанию `max2tg`) |
+| `TG_QUEUE_WORKERS` | нет | Количество воркеров отправки в TG |
+| `TG_MIN_SEND_INTERVAL_MS` | нет | Минимальный интервал между отправками (мс) |
+| `TG_QUEUE_MAX_ATTEMPTS` | нет | Количество попыток отправки через очередь |
+| `TG_QUEUE_JOB_TTL_SEC` | нет | TTL задания очереди отправки (сек, по умолчанию `300`) |
+| `DEBUG` | нет | `true` — подробные логи |
 | `REPLY_ENABLED` | нет | `true` — разрешить ответы из Telegram в Max |
+| `MAX_TOKEN` | нет | legacy bootstrap для авто-регистрации первого аккаунта |
+| `MAX_DEVICE_ID` | нет | legacy bootstrap для авто-регистрации первого аккаунта |
+| `TG_CHAT_ID` | нет | legacy bootstrap: TG user/chat для первой связки |
+
+Регистрация MAX-аккаунтов выполняется через Telegram:
+
+- `/register <device_id> <token> [name]`
+- `/accounts`
+- `/remove <account_id>`
+
+Для администратора:
+
+- `/bind <tg_user_id> <device_id> <token> [name]`
+- `/activate <tg_user_id>`
+- `/deactivate <tg_user_id>`
+- `/users [page]`
+- `/help`
 
 ## Запуск
 
@@ -103,6 +131,29 @@ docker-compose down
 ```bash
 docker-compose up -d --build
 ```
+
+### Redis (опционально, вручную перед первым запуском)
+
+Если нужен устойчивый queue/cooldown через Redis (рекомендуется при высоком потоке сообщений), установите Redis отдельно.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install -y redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping
+```
+
+Ожидаемый ответ: `PONG`.
+
+В `.env` оставьте:
+
+```env
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+Если Redis не установлен или недоступен, приложение автоматически работает с in-memory fallback.
 
 ### Локальный запуск
 
@@ -190,8 +241,8 @@ Max (WebSocket) ──→ max2tg ──→ Telegram Bot ──→ Ваш чат
 ```
 
 1. Приложение подключается к Max через WebSocket как ваш аккаунт
-2. Новые входящие сообщения пересылаются в указанный Telegram-чат
-3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно написать текст, который отправится обратно в соответствующий чат Max
+2. Для каждого зарегистрированного MAX-аккаунта сообщения пересылаются владельцу в Telegram (приватный чат с ботом)
+3. Если `REPLY_ENABLED=true`, под сообщением есть кнопка «Ответить», reply уходит в исходный чат и исходный MAX-аккаунт
 
 ## Структура проекта
 
@@ -204,7 +255,9 @@ max2tg/
 │   ├── max_listener.py   # обработка и форматирование сообщений
 │   ├── resolver.py       # кеш и резолвинг имён контактов/чатов
 │   ├── tg_sender.py      # отправка сообщений в Telegram
-│   └── tg_handler.py     # обработка ответов из Telegram
+│   ├── tg_handler.py     # команды и обработка ответов из Telegram
+│   ├── storage.py        # SQLite-хранилище связок MAX↔TG
+│   └── account_manager.py # рантайм-менеджер мульти-аккаунтов
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -226,8 +279,13 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 - Forwards text messages, photos, videos, files, audio, stickers, contacts, locations, and links
 - Supports forwarded and quoted messages (forward / reply)
 - Different formatting for DMs and group chats
-- Reply from Telegram back to Max (optional, via inline button)
+- Reply from Telegram back to Max (inline button, routed to the correct account)
 - Works as a userbot — connects to your Max account via WebSocket
+- Multiple MAX accounts at the same time
+- Lightweight storage for account credentials and MAX↔Telegram user bindings only (SQLite)
+- Log rotation: 1MB per file, up to 3 rotated files
+- Weekly SQLite backup (keeps last 4 copies)
+- Telegram outbound queue with workers and optional Redis backend for high throughput
 - Docker-ready: deploy with a single command
 
 ## Requirements
@@ -269,12 +327,35 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `MAX_TOKEN` | yes | Max auth token |
-| `MAX_DEVICE_ID` | yes | Max device ID |
 | `TG_BOT_TOKEN` | yes | Telegram bot token |
-| `TG_CHAT_ID` | yes | Chat ID to forward messages to |
-| `DEBUG` | no | `true` — verbose logs + JSON dumps to `debug/` |
+| `TG_ADMIN_ID` | yes | Telegram bot admin user ID |
+| `ENCRYPTION_KEY` | yes | Secret used to encrypt `max_token` and `max_device_id` in SQLite |
+| `DB_PATH` | no | SQLite path (default `data/max2tg.sqlite3`) |
+| `REDIS_URL` | no | Redis URL for outbound queue backend (default `redis://127.0.0.1:6379/0`; falls back to memory if unavailable) |
+| `REDIS_KEY_PREFIX` | no | Global Redis key prefix (default `max2tg`) |
+| `TG_QUEUE_WORKERS` | no | Number of TG sender workers |
+| `TG_MIN_SEND_INTERVAL_MS` | no | Minimum delay between sends (ms) |
+| `TG_QUEUE_MAX_ATTEMPTS` | no | Number of queue send attempts |
+| `TG_QUEUE_JOB_TTL_SEC` | no | Outbound queue job TTL in seconds (default `300`) |
+| `DEBUG` | no | `true` — verbose logs |
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
+| `MAX_TOKEN` | no | legacy bootstrap for first account |
+| `MAX_DEVICE_ID` | no | legacy bootstrap for first account |
+| `TG_CHAT_ID` | no | legacy bootstrap target TG user/chat |
+
+Register MAX accounts via Telegram:
+
+- `/register <device_id> <token> [name]`
+- `/accounts`
+- `/remove <account_id>`
+
+For admin:
+
+- `/bind <tg_user_id> <device_id> <token> [name]`
+- `/activate <tg_user_id>`
+- `/deactivate <tg_user_id>`
+- `/users [page]`
+- `/help`
 
 ## Running
 
@@ -306,6 +387,29 @@ Rebuild after update:
 ```bash
 docker-compose up -d --build
 ```
+
+### Redis (optional, install manually before first run)
+
+If you want durable queue/cooldown with Redis (recommended for high traffic), install Redis separately.
+
+Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install -y redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping
+```
+
+Expected output: `PONG`.
+
+Keep in `.env`:
+
+```env
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+If Redis is not available, the app automatically uses in-memory fallback.
 
 ### Local
 
@@ -393,8 +497,8 @@ Max (WebSocket) ──→ max2tg ──→ Telegram Bot ──→ Your chat
 ```
 
 1. The app connects to Max via WebSocket using your account credentials
-2. Incoming messages are forwarded to the specified Telegram chat
-3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it, type your response, and it gets sent back to the corresponding Max chat
+2. Incoming messages for each registered MAX account are forwarded to that account owner in Telegram private chat
+3. If `REPLY_ENABLED=true`, each message includes a "Reply" button and the response is routed back to the original Max chat/account
 
 ## Project Structure
 
@@ -407,7 +511,9 @@ max2tg/
 │   ├── max_listener.py   # message processing and formatting
 │   ├── resolver.py       # contact/chat name cache and resolution
 │   ├── tg_sender.py      # sends messages to Telegram
-│   └── tg_handler.py     # handles replies from Telegram
+│   ├── tg_handler.py     # commands and reply handling from Telegram
+│   ├── storage.py        # SQLite bindings storage
+│   └── account_manager.py # multi-account runtime manager
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
