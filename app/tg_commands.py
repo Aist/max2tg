@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -13,7 +14,11 @@ from telegram.ext import (
     filters,
 )
 
-from app.account_manager import AccountManager
+from app.account_manager import (
+    AccountManager,
+    DuplicateActiveBindingError,
+    MaxBindingsLimitError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +30,13 @@ PENDING_ASKME_KEY = "pending_askme_message"
 ACCEPT_TERMS_CALLBACK = "accept_terms"
 ASKME_COOLDOWN_SEC = 24 * 60 * 60
 REMOVE_ALL_CALLBACK_PREFIX = "remove_all"
+REGISTER_COOLDOWN_SEC = 60
+REMOVE_COOLDOWN_SEC = 30
+REGISTER_DAILY_LIMIT = 10
+REMOVE_DAILY_LIMIT = 20
+GLOBAL_MUTATION_WINDOW_SEC = 60
+GLOBAL_MUTATION_LIMIT = 120
+MUTATION_LOCK_SEC = 20
 
 TERMS_TEXT = (
     "*Отказ от ответсвенности:*\n"
@@ -175,6 +187,74 @@ def _askme_key(context: ContextTypes.DEFAULT_TYPE, tg_user_id: int) -> str:
     return f"{prefix}:askme:cooldown:{tg_user_id}"
 
 
+def _ops_key(context: ContextTypes.DEFAULT_TYPE, suffix: str) -> str:
+    prefix = str(context.bot_data.get("redis_key_prefix", "max2tg")).strip(":")
+    return f"{prefix}:ops:{suffix}"
+
+
+def _seconds_until_next_utc_day() -> int:
+    now = int(time.time())
+    day = now // 86400
+    next_day_ts = (day + 1) * 86400
+    return max(1, next_day_ts - now)
+
+
+async def _counter_incr_with_expiry(store, key: str, expiry_sec: int) -> int:
+    try:
+        value = await store.incr(key)
+        if int(value) == 1:
+            await store.expire(key, expiry_sec)
+        return int(value)
+    except Exception:
+        current_raw = await store.get(key)
+        current = int(current_raw) if current_raw else 0
+        current += 1
+        await store.set(key, str(current), ex=expiry_sec)
+        return current
+
+
+async def _acquire_user_lock(store, key: str, lock_sec: int) -> bool:
+    try:
+        result = await store.set(key, "1", ex=lock_sec, nx=True)
+        return bool(result)
+    except TypeError:
+        ttl = await store.ttl(key)
+        if ttl and ttl > 0:
+            return False
+        await store.set(key, "1", ex=lock_sec)
+        return True
+
+
+async def _apply_action_guards(
+    context: ContextTypes.DEFAULT_TYPE,
+    tg_user_id: int,
+    action: str,
+    cooldown_sec: int,
+    daily_limit: int,
+) -> tuple[bool, str | None]:
+    store = context.bot_data.get("askme_cooldown")
+    if not store:
+        return True, None
+
+    global_key = _ops_key(context, f"global:{action}:{int(time.time()) // GLOBAL_MUTATION_WINDOW_SEC}")
+    global_cnt = await _counter_incr_with_expiry(store, global_key, GLOBAL_MUTATION_WINDOW_SEC)
+    if global_cnt > GLOBAL_MUTATION_LIMIT:
+        return False, "⚠️ Сервис временно перегружен, попробуйте чуть позже."
+
+    cooldown_key = _ops_key(context, f"cooldown:{action}:{tg_user_id}")
+    ttl = await store.ttl(cooldown_key)
+    if ttl and ttl > 0:
+        return False, f"⚠️ Слишком часто. Повторите через {ttl} сек."
+    await store.set(cooldown_key, "1", ex=cooldown_sec)
+
+    daily_key = _ops_key(context, f"daily:{action}:{tg_user_id}")
+    daily_cnt = await _counter_incr_with_expiry(store, daily_key, _seconds_until_next_utc_day())
+    if daily_cnt > daily_limit:
+        return False, f"⚠️ Достигнут суточный лимит на {action}: {daily_limit}."
+
+    return True, None
+
+
 async def _notify_admin_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     admin_id = int(context.bot_data["admin_id"])
     tg_user_id = int(update.effective_user.id)
@@ -226,6 +306,17 @@ async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
+    allowed, reason = await _apply_action_guards(
+        context=context,
+        tg_user_id=tg_user_id,
+        action="register",
+        cooldown_sec=REGISTER_COOLDOWN_SEC,
+        daily_limit=REGISTER_DAILY_LIMIT,
+    )
+    if not allowed:
+        await update.message.reply_text(reason)
+        return
+
     args = context.args or []
     if len(args) < 3:
         await update.message.reply_text(_max_creds_guide_register())
@@ -240,11 +331,17 @@ async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not title:
         await update.message.reply_text("⚠️ Укажите имя связки (до 25 символов).")
         return
-    is_valid_creds = await manager.validate_credentials(max_token=token, max_device_id=device_id)
-    if not is_valid_creds:
-        await update.message.reply_text("⚠️ Реквизиты MAX некорректны: device_id/token не приняты.")
+    lock_store = context.bot_data.get("askme_cooldown")
+    lock_key = _ops_key(context, f"lock:register:{tg_user_id}")
+    lock_acquired = await _acquire_user_lock(lock_store, lock_key, MUTATION_LOCK_SEC) if lock_store else True
+    if not lock_acquired:
+        await update.message.reply_text("⚠️ Операция уже выполняется, попробуйте через несколько секунд.")
         return
     try:
+        is_valid_creds = await manager.validate_credentials(max_token=token, max_device_id=device_id)
+        if not is_valid_creds:
+            await update.message.reply_text("⚠️ Реквизиты MAX некорректны: device_id/token не приняты.")
+            return
         record = await manager.add_account(
             tg_user_id=tg_user_id,
             max_token=token,
@@ -254,6 +351,15 @@ async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except PermissionError:
         await _send_terms(update)
         return
+    except DuplicateActiveBindingError:
+        await update.message.reply_text("⚠️ Такая связка уже имеется и активна для вас.")
+        return
+    except MaxBindingsLimitError:
+        await update.message.reply_text("⚠️ Достигнут лимит: максимум 5 активных связок MAX на пользователя.")
+        return
+    finally:
+        if lock_store:
+            await lock_store.delete(lock_key)
     label = record.title or f"MAX #{record.id}"
     await update.message.reply_text(f"✅ Аккаунт добавлен: {label} (ID={record.id})")
 
@@ -295,6 +401,16 @@ async def _on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f"⚠️ Пользователь {target_user_id} не принял соглашение. "
             "Сначала он должен нажать 'Принимаю' в личке с ботом."
+        )
+        return
+    except DuplicateActiveBindingError:
+        await update.message.reply_text(
+            "⚠️ Такая связка уже имеется и активна для этого пользователя."
+        )
+        return
+    except MaxBindingsLimitError:
+        await update.message.reply_text(
+            "⚠️ Невозможно создать привязку: у пользователя уже 5 активных связок MAX."
         )
         return
     await update.message.reply_text(
@@ -457,6 +573,16 @@ async def _on_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     manager: AccountManager = context.bot_data["account_manager"]
     tg_user_id = int(update.effective_user.id)
+    allowed, reason = await _apply_action_guards(
+        context=context,
+        tg_user_id=tg_user_id,
+        action="remove",
+        cooldown_sec=REMOVE_COOLDOWN_SEC,
+        daily_limit=REMOVE_DAILY_LIMIT,
+    )
+    if not allowed:
+        await update.message.reply_text(reason)
+        return
     accounts = await manager.list_accounts_for_user(tg_user_id)
     if not accounts:
         await update.message.reply_text("У вас нет активных привязок MAX.")
@@ -509,10 +635,20 @@ async def _on_remove_all_confirm(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     manager: AccountManager = context.bot_data["account_manager"]
-    removed_count = await manager.remove_all_accounts_for_user(actor_id)
-    await query.message.edit_text(
-        f"✅ Отключено привязок MAX: {removed_count}."
-    )
+    lock_store = context.bot_data.get("askme_cooldown")
+    lock_key = _ops_key(context, f"lock:remove:{actor_id}")
+    lock_acquired = await _acquire_user_lock(lock_store, lock_key, MUTATION_LOCK_SEC) if lock_store else True
+    if not lock_acquired:
+        await query.message.edit_text("⚠️ Операция уже выполняется, попробуйте чуть позже.")
+        return
+    try:
+        removed_count = await manager.remove_all_accounts_for_user(actor_id)
+        await query.message.edit_text(
+            f"✅ Отключено привязок MAX: {removed_count}."
+        )
+    finally:
+        if lock_store:
+            await lock_store.delete(lock_key)
 
 
 async def _on_askme(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

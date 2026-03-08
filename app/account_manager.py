@@ -12,6 +12,14 @@ from app.storage import DailyReportRow, MaxAccountRecord, Storage, TgUserRecord
 log = logging.getLogger(__name__)
 
 
+class DuplicateActiveBindingError(Exception):
+    pass
+
+
+class MaxBindingsLimitError(Exception):
+    pass
+
+
 @dataclass
 class AccountRuntime:
     record: MaxAccountRecord
@@ -20,6 +28,8 @@ class AccountRuntime:
 
 
 class AccountManager:
+    MAX_ACTIVE_BINDINGS_PER_USER = 5
+
     def __init__(
         self,
         storage: Storage,
@@ -60,6 +70,15 @@ class AccountManager:
     ) -> MaxAccountRecord:
         if not await self._storage.has_terms_consent(tg_user_id):
             raise PermissionError("Terms are not accepted")
+        existing_accounts = await self._storage.list_accounts_for_user(tg_user_id)
+        for existing in existing_accounts:
+            # Prevent duplicate active binding for the same user.
+            if existing.max_device_id == max_device_id or existing.max_token == max_token:
+                raise DuplicateActiveBindingError("Active binding already exists for this user")
+        if len(existing_accounts) >= self.MAX_ACTIVE_BINDINGS_PER_USER:
+            raise MaxBindingsLimitError(
+                f"Maximum active MAX bindings per user is {self.MAX_ACTIVE_BINDINGS_PER_USER}"
+            )
         user = await self._storage.get_user(tg_user_id)
         if user is None:
             await self._storage.ensure_user(tg_user_id)
