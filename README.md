@@ -75,7 +75,7 @@ cp .env.example .env
 | `TG_ADMIN_ID` | да | Telegram ID администратора бота |
 | `ENCRYPTION_KEY` | да | Секрет для шифрования `max_token` и `max_device_id` в SQLite |
 | `DB_PATH` | нет | Путь к SQLite БД (по умолчанию `data/max2tg.sqlite3`) |
-| `REDIS_URL` | нет | URL Redis для внешней очереди отправки (по умолчанию `redis://127.0.0.1:6379/0`; при недоступности fallback в память) |
+| `REDIS_URL` | нет | URL Redis для внешней очереди отправки (по умолчанию `redis://127.0.0.1:6379/0`; в Docker Compose переопределяется на `redis://redis:6379/0`) |
 | `REDIS_KEY_PREFIX` | нет | Глобальный префикс ключей Redis (по умолчанию `max2tg`) |
 | `TG_QUEUE_WORKERS` | нет | Количество воркеров отправки в TG |
 | `TG_MIN_SEND_INTERVAL_MS` | нет | Минимальный интервал между отправками (мс) |
@@ -103,40 +103,19 @@ cp .env.example .env
 
 ## Запуск
 
-### Docker (рекомендуется для сервера)
+### 1. Без Docker: systemd + Redis на хосте (Linux)
 
 ```bash
 git clone git@github.com:Aist/max2tg.git max2tg
 cd max2tg
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
 # отредактируйте .env
-
-docker-compose up -d
 ```
 
-Логи:
-
-```bash
-docker-compose logs -f
-```
-
-Остановка:
-
-```bash
-docker-compose down
-```
-
-Пересборка после обновления:
-
-```bash
-docker-compose up -d --build
-```
-
-### Redis (опционально, вручную перед первым запуском)
-
-Если нужен устойчивый queue/cooldown через Redis (рекомендуется при высоком потоке сообщений), установите Redis отдельно.
-
-Ubuntu/Debian:
+Установите Redis на хосте:
 
 ```bash
 sudo apt update
@@ -145,67 +124,11 @@ sudo systemctl enable --now redis-server
 redis-cli ping
 ```
 
-Ожидаемый ответ: `PONG`.
-
 В `.env` оставьте:
 
 ```env
 REDIS_URL=redis://127.0.0.1:6379/0
 ```
-
-Если Redis не установлен или недоступен, приложение автоматически работает с in-memory fallback.
-
-### Локальный запуск
-
-#### Linux / macOS
-
-```bash
-git clone <repo-url> max2tg
-cd max2tg
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env
-# отредактируйте .env
-
-python -m app.main
-```
-
-#### Windows (PowerShell)
-
-```powershell
-git clone <repo-url> max2tg
-cd max2tg
-
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-copy .env.example .env
-# отредактируйте .env
-
-python -m app.main
-```
-
-#### Windows (CMD)
-
-```cmd
-git clone <repo-url> max2tg
-cd max2tg
-
-python -m venv .venv
-.venv\Scripts\activate.bat
-pip install -r requirements.txt
-
-copy .env.example .env
-# отредактируйте .env
-
-python -m app.main
-```
-
-### Запуск как systemd-сервис (Linux)
 
 Создайте файл `/etc/systemd/system/max2tg.service`:
 
@@ -226,11 +149,44 @@ EnvironmentFile=/opt/max2tg/.env
 WantedBy=multi-user.target
 ```
 
+Запуск/рестарт:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now max2tg
+sudo systemctl restart max2tg
 sudo journalctl -u max2tg -f
 ```
+
+### 2. Docker Compose: бот + Redis вместе
+
+```bash
+git clone git@github.com:Aist/max2tg.git max2tg
+cd max2tg
+cp .env.example .env
+# отредактируйте .env
+docker compose up -d --build
+```
+
+Логи:
+
+```bash
+docker compose logs -f
+```
+
+Остановка:
+
+```bash
+docker compose down
+```
+
+`docker-compose.yml` поднимает Redis как отдельный сервис (`redis`) и автоматически переопределяет:
+
+```env
+REDIS_URL=redis://redis:6379/0
+```
+
+SQLite вынесена в bind-mount `./data:/app/data`, поэтому база не теряется при пересборке контейнера.
 
 ## Как это работает
 
@@ -331,7 +287,7 @@ cp .env.example .env
 | `TG_ADMIN_ID` | yes | Telegram bot admin user ID |
 | `ENCRYPTION_KEY` | yes | Secret used to encrypt `max_token` and `max_device_id` in SQLite |
 | `DB_PATH` | no | SQLite path (default `data/max2tg.sqlite3`) |
-| `REDIS_URL` | no | Redis URL for outbound queue backend (default `redis://127.0.0.1:6379/0`; falls back to memory if unavailable) |
+| `REDIS_URL` | no | Redis URL for outbound queue backend (default `redis://127.0.0.1:6379/0`; overridden to `redis://redis:6379/0` in Docker Compose) |
 | `REDIS_KEY_PREFIX` | no | Global Redis key prefix (default `max2tg`) |
 | `TG_QUEUE_WORKERS` | no | Number of TG sender workers |
 | `TG_MIN_SEND_INTERVAL_MS` | no | Minimum delay between sends (ms) |
@@ -359,40 +315,19 @@ For admin:
 
 ## Running
 
-### Docker (recommended for servers)
+### 1. Without Docker: systemd + host Redis (Linux)
 
 ```bash
 git clone git@github.com:Aist/max2tg.git max2tg
 cd max2tg
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
 # edit .env
-
-docker-compose up -d
 ```
 
-Logs:
-
-```bash
-docker-compose logs -f
-```
-
-Stop:
-
-```bash
-docker-compose down
-```
-
-Rebuild after update:
-
-```bash
-docker-compose up -d --build
-```
-
-### Redis (optional, install manually before first run)
-
-If you want durable queue/cooldown with Redis (recommended for high traffic), install Redis separately.
-
-Ubuntu/Debian:
+Install Redis on host:
 
 ```bash
 sudo apt update
@@ -401,67 +336,11 @@ sudo systemctl enable --now redis-server
 redis-cli ping
 ```
 
-Expected output: `PONG`.
-
 Keep in `.env`:
 
 ```env
 REDIS_URL=redis://127.0.0.1:6379/0
 ```
-
-If Redis is not available, the app automatically uses in-memory fallback.
-
-### Local
-
-#### Linux / macOS
-
-```bash
-git clone <repo-url> max2tg
-cd max2tg
-
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env
-# edit .env
-
-python -m app.main
-```
-
-#### Windows (PowerShell)
-
-```powershell
-git clone <repo-url> max2tg
-cd max2tg
-
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-copy .env.example .env
-# edit .env
-
-python -m app.main
-```
-
-#### Windows (CMD)
-
-```cmd
-git clone <repo-url> max2tg
-cd max2tg
-
-python -m venv .venv
-.venv\Scripts\activate.bat
-pip install -r requirements.txt
-
-copy .env.example .env
-# edit .env
-
-python -m app.main
-```
-
-### Running as a systemd service (Linux)
 
 Create `/etc/systemd/system/max2tg.service`:
 
@@ -482,11 +361,44 @@ EnvironmentFile=/opt/max2tg/.env
 WantedBy=multi-user.target
 ```
 
+Start/restart:
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now max2tg
+sudo systemctl restart max2tg
 sudo journalctl -u max2tg -f
 ```
+
+### 2. Docker Compose: bot + Redis together
+
+```bash
+git clone git@github.com:Aist/max2tg.git max2tg
+cd max2tg
+cp .env.example .env
+# edit .env
+docker compose up -d --build
+```
+
+Logs:
+
+```bash
+docker compose logs -f
+```
+
+Stop:
+
+```bash
+docker compose down
+```
+
+`docker-compose.yml` starts Redis as a separate service (`redis`) and automatically overrides:
+
+```env
+REDIS_URL=redis://redis:6379/0
+```
+
+SQLite is persisted via bind mount `./data:/app/data`, so DB data survives container rebuilds.
 
 ## How It Works
 
