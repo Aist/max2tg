@@ -72,6 +72,7 @@ cp .env.example .env
 | `TG_CHAT_ID` | да | ID чата, куда пересылать сообщения |
 | `DEBUG` | нет | `true` — подробные логи + дамп JSON в `debug/` |
 | `REPLY_ENABLED` | нет | `true` — разрешить ответы из Telegram в Max |
+| `LOG_DIR` | нет | Путь к директории логов (по умолчанию `logs`) |
 
 ## Запуск
 
@@ -86,10 +87,16 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-Логи:
+Логи Docker (stdout):
 
 ```bash
 docker-compose logs -f
+```
+
+Логи на диске доступны на хосте в директории `./logs/` — файл `max2tg.log` с ротацией по 10 МБ (хранится 5 файлов):
+
+```bash
+tail -f logs/max2tg.log
 ```
 
 Остановка:
@@ -205,11 +212,38 @@ max2tg/
 │   ├── resolver.py       # кеш и резолвинг имён контактов/чатов
 │   ├── tg_sender.py      # отправка сообщений в Telegram
 │   └── tg_handler.py     # обработка ответов из Telegram
+├── tests/
+│   ├── test_config.py        # тесты загрузки настроек
+│   ├── test_max_client.py    # тесты клиента Max (опкоды, парсинг)
+│   ├── test_max_listener.py  # тесты форматирования сообщений
+│   └── test_resolver.py      # тесты резолвинга имён контактов
+├── logs/                # логи (создаётся автоматически)
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
+├── pytest.ini
 └── requirements.txt
 ```
+
+## Тесты
+
+Установите зависимости для тестирования:
+
+```bash
+pip install pytest pytest-asyncio
+```
+
+Запуск тестов:
+
+```bash
+pytest
+```
+
+Тесты покрывают:
+- загрузку и валидацию конфигурации (`config.py`)
+- парсинг сообщений и опкоды WebSocket-клиента (`max_client.py`)
+- форматирование размеров файлов и определение типа медиа (`max_listener.py`)
+- резолвинг имён контактов и парсинг снапшота (`resolver.py`)
 
 ---
 
@@ -275,6 +309,7 @@ cp .env.example .env
 | `TG_CHAT_ID` | yes | Chat ID to forward messages to |
 | `DEBUG` | no | `true` — verbose logs + JSON dumps to `debug/` |
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
+| `LOG_DIR` | no | Log directory path (default: `logs`) |
 
 ## Running
 
@@ -289,10 +324,16 @@ cp .env.example .env
 docker-compose up -d
 ```
 
-Logs:
+Docker logs (stdout):
 
 ```bash
 docker-compose logs -f
+```
+
+Persistent logs are available on the host in `./logs/` — file `max2tg.log` with rotation at 10 MB (5 files kept):
+
+```bash
+tail -f logs/max2tg.log
 ```
 
 Stop:
@@ -408,11 +449,38 @@ max2tg/
 │   ├── resolver.py       # contact/chat name cache and resolution
 │   ├── tg_sender.py      # sends messages to Telegram
 │   └── tg_handler.py     # handles replies from Telegram
+├── tests/
+│   ├── test_config.py        # settings loading tests
+│   ├── test_max_client.py    # Max client tests (opcodes, parsing)
+│   ├── test_max_listener.py  # message formatting tests
+│   └── test_resolver.py      # contact name resolution tests
+├── logs/                # log files (created automatically)
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
+├── pytest.ini
 └── requirements.txt
 ```
+
+## Tests
+
+Install test dependencies:
+
+```bash
+pip install pytest pytest-asyncio
+```
+
+Run tests:
+
+```bash
+pytest
+```
+
+Test coverage:
+- configuration loading and validation (`config.py`)
+- message parsing and WebSocket opcodes (`max_client.py`)
+- file size formatting and media type detection (`max_listener.py`)
+- contact name resolution and snapshot parsing (`resolver.py`)
 
 ## License
 

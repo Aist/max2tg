@@ -17,10 +17,21 @@ log = logging.getLogger(__name__)
 PENDING_REPLY_KEY = "pending_reply_chat_id"
 PENDING_REPLY_LABEL_KEY = "pending_reply_label"
 
+_ALLOWED_CHAT_ID_KEY = "allowed_chat_id"
+
 
 async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline 'Reply' button press."""
     query = update.callback_query
+
+    allowed_chat_id = context.bot_data.get(_ALLOWED_CHAT_ID_KEY)
+    if allowed_chat_id is not None and (
+        update.effective_chat.id != allowed_chat_id
+        and update.effective_user.id != allowed_chat_id
+    ):
+        await query.answer()
+        return
+
     await query.answer()
 
     data = query.data or ""
@@ -83,6 +94,7 @@ def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str) -> App
     """Build and configure the Telegram Application with handlers."""
     app = Application.builder().token(token).build()
     app.bot_data["max_client"] = max_client
+    app.bot_data[_ALLOWED_CHAT_ID_KEY] = int(allowed_chat_id)
 
     chat_filter = filters.Chat(chat_id=int(allowed_chat_id))
 

@@ -14,6 +14,12 @@ log = logging.getLogger(__name__)
 
 DEBUG_DIR = "debug"
 
+
+def _log_task_exception(task: "asyncio.Task") -> None:
+    """Done-callback that logs any exception raised by a fire-and-forget task."""
+    if not task.cancelled() and task.exception() is not None:
+        log.exception("Unhandled exception in background task", exc_info=task.exception())
+
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -126,7 +132,7 @@ class MaxClient:
 
     async def cmd(self, opcode: int, payload: dict, timeout: float = 10) -> dict:
         """Send a request and wait for the response (cmd=1 with same seq)."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict] = loop.create_future()
         seq = await self._send(opcode, payload)
         self._pending[seq] = fut
@@ -147,6 +153,7 @@ class MaxClient:
                 else:
                     break
             except Exception:
+                log.exception("Heartbeat error, stopping heartbeat loop")
                 break
 
     # ── main loop ──────────────────────────────────────────────────
@@ -161,7 +168,7 @@ class MaxClient:
                 try:
                     log.info("Connecting to %s ...", self.WS_URL)
                     async with session.ws_connect(
-                        self.WS_URL, headers=_WS_HEADERS, ssl=False
+                        self.WS_URL, headers=_WS_HEADERS
                     ) as ws:
                         self._ws = ws
                         self._seq = 0
@@ -231,47 +238,50 @@ class MaxClient:
                 fut.set_result({})
             log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, payload)
 
-        payload_preview = json.dumps(payload, ensure_ascii=False)
-        if len(payload_preview) > 3000:
-            payload_preview = payload_preview[:3000] + "…"
+        # server-initiated events — not a reply to one of our requests
+        else:
+            payload_preview = json.dumps(payload, ensure_ascii=False)
+            if len(payload_preview) > 3000:
+                payload_preview = payload_preview[:3000] + "…"
 
-        if op == OpCode.HANDSHAKE and cmd == 1:
-            log.info("Handshake OK → sending auth token...")
-            await self._send(
-                OpCode.AUTH_SNAPSHOT,
-                {
-                    "chatsCount": 10,
-                    "interactive": True,
-                    "token": self.token,
-                },
-            )
-
-        elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
-            self._my_id = payload.get("profile", {}).get("id")
-            log.info("Authorized! my_id=%s", self._my_id)
-            if self.debug:
-                self._dump_json("snapshot.json", payload)
-
-            if self._on_ready_cb:
-                await self._on_ready_cb(payload)
-
-        elif op == OpCode.DISPATCH:
-            self._dispatch_counter += 1
-            if self.debug and self._dispatch_counter <= 20:
-                self._dump_json(
-                    f"dispatch_{self._dispatch_counter:04d}.json", payload
+            if op == OpCode.HANDSHAKE and cmd == 1:
+                log.info("Handshake OK → sending auth token...")
+                await self._send(
+                    OpCode.AUTH_SNAPSHOT,
+                    {
+                        "chatsCount": 10,
+                        "interactive": True,
+                        "token": self.token,
+                    },
                 )
 
-            if self._on_message_cb:
-                msg = self._parse_message(payload)
-                if msg:
-                    asyncio.create_task(self._on_message_cb(msg))
+            elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
+                self._my_id = payload.get("profile", {}).get("id")
+                log.info("Authorized! my_id=%s", self._my_id)
+                if self.debug:
+                    self._dump_json("snapshot.json", payload)
 
-        elif op in (OpCode.HEARTBEAT_PING,):
-            log.debug("Heartbeat op=%s", op)
+                if self._on_ready_cb:
+                    await self._on_ready_cb(payload)
 
-        elif cmd not in (1, 3):
-            log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, payload_preview[:500])
+            elif op == OpCode.DISPATCH:
+                self._dispatch_counter += 1
+                if self.debug and self._dispatch_counter <= 20:
+                    self._dump_json(
+                        f"dispatch_{self._dispatch_counter:04d}.json", payload
+                    )
+
+                if self._on_message_cb:
+                    msg = self._parse_message(payload)
+                    if msg:
+                        task = asyncio.create_task(self._on_message_cb(msg))
+                        task.add_done_callback(_log_task_exception)
+
+            elif op in (OpCode.HEARTBEAT_PING,):
+                log.debug("Heartbeat op=%s", op)
+
+            elif cmd not in (1, 3):
+                log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, payload_preview[:500])
 
     # ── WebSocket RPC: fetch contacts ──────────────────────────────
 
@@ -280,7 +290,8 @@ class MaxClient:
         if not contact_ids:
             return {}
         resp = await self.cmd(OpCode.CONTACT_GET, {"contactIds": contact_ids})
-        self._dump_json("contacts_response.json", resp)
+        if self.debug:
+            self._dump_json("contacts_response.json", resp)
         log.info("fetch_contacts(%s) → keys: %s", contact_ids, list(resp.keys()))
         return resp
 
@@ -307,7 +318,7 @@ class MaxClient:
             close_after = True
         try:
             async with session.get(
-                url, headers=_HTTP_HEADERS, ssl=False,
+                url, headers=_HTTP_HEADERS,
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status == 200:

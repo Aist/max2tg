@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from logging.handlers import RotatingFileHandler
 
 from app.config import load_settings
 from app.max_listener import create_max_client
@@ -20,11 +22,22 @@ async def main():
     settings = load_settings()
 
     level = logging.DEBUG if settings.debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        force=True,
+    fmt = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
+
+    log_dir = os.environ.get("LOG_DIR", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        filename=os.path.join(log_dir, "max2tg.log"),
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=5,
+        encoding="utf-8",
     )
+    file_handler.setFormatter(fmt)
+
+    logging.basicConfig(level=level, handlers=[console_handler, file_handler], force=True)
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)

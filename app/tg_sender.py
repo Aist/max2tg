@@ -53,8 +53,10 @@ class TelegramSender:
                 log.warning("Telegram timeout (attempt %d/%d)", attempt, MAX_RETRIES)
                 await asyncio.sleep(2 * attempt)
             except Exception:
-                log.exception("Failed to send to Telegram")
-                return None
+                log.exception("Failed to send to Telegram (attempt %d/%d)", attempt, MAX_RETRIES)
+                if attempt == MAX_RETRIES:
+                    return None
+                await asyncio.sleep(2 * attempt)
         return None
 
     async def send(self, text: str, reply_markup=None) -> None:

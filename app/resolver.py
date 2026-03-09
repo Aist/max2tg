@@ -84,10 +84,15 @@ class ContactResolver:
                     pass
 
             if not title and ctype == "DIALOG" and self._my_id:
-                peer_id = next(
-                    (int(uid) for uid in participants if int(uid) != self._my_id),
-                    None,
-                )
+                peer_id = None
+                for uid in participants:
+                    try:
+                        uid_int = int(uid)
+                    except (ValueError, TypeError):
+                        continue
+                    if uid_int != self._my_id:
+                        peer_id = uid_int
+                        break
                 if peer_id:
                     self.chats[cid] = f"DM:{peer_id}"
 

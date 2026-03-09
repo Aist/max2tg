@@ -25,6 +25,14 @@ def load_settings() -> Settings:
             "Copy .env.example to .env and fill in the values."
         )
 
+    tg_chat_id = os.environ["TG_CHAT_ID"]
+    try:
+        int(tg_chat_id)
+    except ValueError:
+        raise SystemExit(
+            f"TG_CHAT_ID must be a valid integer, got: {tg_chat_id!r}"
+        )
+
     return Settings(
         max_token=os.environ["MAX_TOKEN"],
         max_device_id=os.environ["MAX_DEVICE_ID"],

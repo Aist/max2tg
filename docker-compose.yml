@@ -5,4 +5,7 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
-    privileged: true
+    environment:
+      LOG_DIR: /app/logs
+    volumes:
+      - ./logs:/app/logs
