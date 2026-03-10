@@ -34,6 +34,7 @@ REGISTER_COOLDOWN_SEC = 60
 REMOVE_COOLDOWN_SEC = 30
 REGISTER_DAILY_LIMIT = 10
 REMOVE_DAILY_LIMIT = 20
+REGISTER_BIND_COOLDOWN_GRACE = 5
 GLOBAL_MUTATION_WINDOW_SEC = 60
 GLOBAL_MUTATION_LIMIT = 120
 MUTATION_LOCK_SEC = 20
@@ -231,6 +232,7 @@ async def _apply_action_guards(
     action: str,
     cooldown_sec: int,
     daily_limit: int,
+    cooldown_grace_attempts: int = 0,
 ) -> tuple[bool, str | None]:
     store = context.bot_data.get("askme_cooldown")
     if not store:
@@ -241,16 +243,23 @@ async def _apply_action_guards(
     if global_cnt > GLOBAL_MUTATION_LIMIT:
         return False, "⚠️ Сервис временно перегружен, попробуйте чуть позже."
 
-    cooldown_key = _ops_key(context, f"cooldown:{action}:{tg_user_id}")
-    ttl = await store.ttl(cooldown_key)
-    if ttl and ttl > 0:
-        return False, f"⚠️ Слишком часто. Повторите через {ttl} сек."
-    await store.set(cooldown_key, "1", ex=cooldown_sec)
-
     daily_key = _ops_key(context, f"daily:{action}:{tg_user_id}")
     daily_cnt = await _counter_incr_with_expiry(store, daily_key, _seconds_until_next_utc_day())
     if daily_cnt > daily_limit:
         return False, f"⚠️ Достигнут суточный лимит на {action}: {daily_limit}."
+
+    skip_cooldown = False
+    if cooldown_grace_attempts > 0:
+        grace_key = _ops_key(context, f"grace:{action}:{tg_user_id}")
+        grace_cnt = await _counter_incr_with_expiry(store, grace_key, _seconds_until_next_utc_day())
+        skip_cooldown = grace_cnt <= cooldown_grace_attempts
+
+    if not skip_cooldown:
+        cooldown_key = _ops_key(context, f"cooldown:{action}:{tg_user_id}")
+        ttl = await store.ttl(cooldown_key)
+        if ttl and ttl > 0:
+            return False, f"⚠️ Слишком часто. Повторите через {ttl} сек."
+        await store.set(cooldown_key, "1", ex=cooldown_sec)
 
     return True, None
 
@@ -306,20 +315,21 @@ async def _on_register(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
+    args = context.args or []
+    if len(args) < 3:
+        await update.message.reply_text(_max_creds_guide_register())
+        return
+
     allowed, reason = await _apply_action_guards(
         context=context,
         tg_user_id=tg_user_id,
         action="register",
         cooldown_sec=REGISTER_COOLDOWN_SEC,
         daily_limit=REGISTER_DAILY_LIMIT,
+        cooldown_grace_attempts=REGISTER_BIND_COOLDOWN_GRACE,
     )
     if not allowed:
         await update.message.reply_text(reason)
-        return
-
-    args = context.args or []
-    if len(args) < 3:
-        await update.message.reply_text(_max_creds_guide_register())
         return
 
     device_id = args[0].strip()
@@ -377,6 +387,18 @@ async def _on_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args or []
     if len(args) < 3 or not args[0].isdigit():
         await update.message.reply_text(_max_creds_guide_bind())
+        return
+
+    allowed, reason = await _apply_action_guards(
+        context=context,
+        tg_user_id=int(update.effective_user.id),
+        action="bind",
+        cooldown_sec=REGISTER_COOLDOWN_SEC,
+        daily_limit=REGISTER_DAILY_LIMIT,
+        cooldown_grace_attempts=REGISTER_BIND_COOLDOWN_GRACE,
+    )
+    if not allowed:
+        await update.message.reply_text(reason)
         return
 
     target_user_id = int(args[0])
