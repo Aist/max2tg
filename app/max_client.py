@@ -86,8 +86,9 @@ class MaxClient:
     WS_URL = "wss://ws-api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
+    chat_ids = []
 
-    def __init__(self, token: str, device_id: str, debug: bool = False):
+    def __init__(self, token: str, device_id: str, chat_ids: str, debug: bool = False):
         self.token = token
         self.device_id = device_id
         self.debug = debug
@@ -100,6 +101,7 @@ class MaxClient:
         self._session: aiohttp.ClientSession | None = None
         self._dispatch_counter = 0
         self._pending: dict[int, asyncio.Future] = {}
+        self.chat_ids += map(int, map(str.strip, chat_ids.split(',')))
 
     # ── decorator API ──────────────────────────────────────────────
 
@@ -273,7 +275,7 @@ class MaxClient:
 
                 if self._on_message_cb:
                     msg = self._parse_message(payload)
-                    if msg:
+                    if msg is not None and ((not self.chat_ids) or (msg.chat_id in self.chat_ids)):
                         task = asyncio.create_task(self._on_message_cb(msg))
                         task.add_done_callback(_log_task_exception)
 
