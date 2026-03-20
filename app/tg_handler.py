@@ -9,6 +9,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+import telegram.constants
 
 from app.max_client import MaxClient
 
@@ -51,7 +52,7 @@ async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data[PENDING_REPLY_LABEL_KEY] = label
 
     await query.message.reply_text(
-        f"✏️ Напишите ответ для <b>{label}</b>:\n"
+        f"✏️ Напишите ответ для <b>{label}</b> (ответом на оригинальное сообщение):\n"
         "<i>(или /cancel для отмены)</i>",
         parse_mode="HTML",
     )
@@ -79,8 +80,17 @@ async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = update.message.text
+    if update.message.chat.type in [telegram.constants.ChatType.GROUP, telegram.constants.ChatType.SUPERGROUP]:
+        text = f"💬 {update.message.from_user.full_name}:\n{text}"
+        elements = [
+            {
+                "type": "STRONG",
+                "length": len(update.message.from_user.full_name)+1,
+                "from": 2
+            }
+        ]
     try:
-        resp = await max_client.send_message(max_chat_id, text)
+        resp = await max_client.send_message(max_chat_id, text, elements)
         if resp:
             await update.message.reply_text(f"✅ Отправлено → <b>{label or max_chat_id}</b>", parse_mode="HTML")
         else:
