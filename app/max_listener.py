@@ -15,7 +15,9 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 def _header(msg: MaxMessage, sender_label: str, chat_label: str, is_dm: bool) -> str:
     if is_dm:
         return f"✉ <b>{sender_label}</b>"
-    return f"💬 <b>{chat_label}</b> | {sender_label}"
+    if chat_label:
+        return f"💬 <b>{chat_label}</b> | {sender_label}"
+    return f"💬 <b>{sender_label}</b>"
 
 
 def _extract_photo_url(attach: dict) -> str | None:
@@ -282,7 +284,10 @@ def create_max_client(
 
         sender_label = escape(await resolver.resolve_user(msg.sender_id))
         is_dm = resolver.is_dm(msg.chat_id)
-        chat_label = escape(resolver.chat_name(msg.chat_id))
+        if len(client.chat_ids) == 1:
+            chat_label = ""
+        else:
+            chat_label = escape(resolver.chat_name(msg.chat_id))
         header_text = _header(msg, sender_label, chat_label, is_dm)
         kb = reply_keyboard(msg.chat_id) if reply_enabled else None
 
