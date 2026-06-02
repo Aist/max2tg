@@ -154,41 +154,22 @@ async def _send_attach(
     return True
 
 
-async def _handle_linked_message(
+async def _handle_forward_message(
     link: dict,
-    link_type: str,
     header_text: str,
     client: MaxClient,
     sender: TelegramSender,
     resolver: ContactResolver,
     kb=None,
 ) -> None:
-    """Handle FORWARD or REPLY link inside a message."""
-    inner = link.get("message") or link
-    fwd_sender_id = inner.get("sender") or link.get("sender")
-    fwd_text = inner.get("text", "") or link.get("text", "")
-    fwd_attaches = inner.get("attaches") or link.get("attaches") or []
+    """Handle FORWARD link inside a message."""
+    fwd_meaningful, fwd_sender_label, fwd_text = await _parse_link(link, resolver)
 
-    fwd_sender_label = ""
-    if fwd_sender_id:
-        fwd_sender_label = escape(await resolver.resolve_user(fwd_sender_id))
-
-    if link_type == "FORWARD":
-        prefix = "↩️ <b>Переслано</b>"
-        if fwd_sender_label:
-            prefix = f"↩️ <b>Переслано от {fwd_sender_label}</b>"
-    else:
-        prefix = "↩ <b>Ответ</b>"
-        if fwd_sender_label:
-            prefix = f"↩ <b>Ответ на {fwd_sender_label}</b>"
+    prefix = "↩️ <b>Переслано</b>"
+    if fwd_sender_label:
+        prefix = f"↩️ <b>Переслано от {fwd_sender_label}</b>"
 
     full_header = f"{header_text}\n{prefix}"
-
-    fwd_meaningful = [
-        a for a in fwd_attaches
-        if isinstance(a, dict) and a.get("_type") not in ("CONTROL", "WIDGET", "INLINE_KEYBOARD", None)
-    ]
-
     if fwd_meaningful:
         text_sent = False
         for i, attach in enumerate(fwd_meaningful):
@@ -206,6 +187,40 @@ async def _handle_linked_message(
     else:
         await sender.send(f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb)
 
+async def _handle_reply_message(
+    link: dict,
+    header_text: str,
+    resolver: ContactResolver,
+):
+    fwd_meaningful, fwd_sender_label, fwd_text = await _parse_link(link, resolver)
+
+    prefix = "↩ <b>Ответ</b>"
+    if fwd_sender_label:
+        prefix = f"↩ <b>Ответ на {fwd_sender_label}</b>"
+
+    full_header = f"{header_text}\n{prefix}"
+    attaches_str = ""
+    if fwd_meaningful:
+        for i, fwd_attach in enumerate(fwd_meaningful):
+            name = fwd_attach.get("name", "file")
+            size = fwd_attach.get("size", 0)
+            size_str = f" ({_human_size(size)})" if size else ""
+            attaches_str += f"📎 <b>{escape(name)}</b>{size_str}\n"
+    return attaches_str, full_header, fwd_text
+
+async def _parse_link(link, resolver):
+    inner = link.get("message") or link
+    fwd_sender_id = inner.get("sender") or link.get("sender")
+    fwd_text = inner.get("text", "") or link.get("text", "")
+    fwd_attaches = inner.get("attaches") or link.get("attaches") or []
+    fwd_sender_label = ""
+    if fwd_sender_id:
+        fwd_sender_label = escape(await resolver.resolve_user(fwd_sender_id))
+    fwd_meaningful = [
+        a for a in fwd_attaches
+        if isinstance(a, dict) and a.get("_type") not in ("CONTROL", "WIDGET", "INLINE_KEYBOARD", None)
+    ]
+    return fwd_meaningful, fwd_sender_label, fwd_text
 
 def _human_size(n: int) -> str:
     for unit in ("Б", "КБ", "МБ", "ГБ"):
@@ -289,11 +304,18 @@ def create_max_client(
         link = msg.link
         link_type = link.get("type") if isinstance(link, dict) else None
 
-        if link_type in ("FORWARD", "REPLY"):
-            await _handle_linked_message(link, link_type, header_text, client, sender, resolver, kb=kb)
+        if link_type == "FORWARD":
+            await _handle_forward_message(link, header_text, client, sender, resolver, kb=kb)
             if msg.text:
                 await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
-            log.info("Forwarded link type=%s → TG", link_type)
+            log.info("Forwarded message → TG")
+            return
+
+        if link_type == "REPLY":
+            attaches_str, full_header, fwd_text = await _handle_reply_message(link, header_text, resolver)
+            if msg.text:
+                await sender.send(f"{full_header}\n<blockquote>{escape(fwd_text)}{attaches_str}</blockquote>{escape(msg.text)}", reply_markup=kb)
+            log.info("Forwarded reply → TG")
             return
 
         meaningful_attaches = [
