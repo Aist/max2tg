@@ -315,8 +315,10 @@ def create_max_client(
             if msg.text and not text_sent:
                 await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
         else:
-            body = escape(msg.text) if msg.text else "<i>[нетекстовое сообщение]</i>"
-            await sender.send(f"{header_text}\n{body}", reply_markup=kb)
-            log.info("Forwarded text → TG")
+            if msg.text:
+                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
+                log.info("Forwarded text → TG")
+            else:
+                log.warning(f"Нетекстовое сообщение! {msg.attaches}")
 
     return client
