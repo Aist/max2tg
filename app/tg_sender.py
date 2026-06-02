@@ -22,12 +22,18 @@ def reply_keyboard(max_chat_id) -> InlineKeyboardMarkup:
 
 
 class TelegramSender:
-    def __init__(self, token: str, chat_id: str, proxy_url: str | None = None):
-        if proxy_url:
-            request = HTTPXRequest(proxy=proxy_url)
-            self._bot = Bot(token=token, request=request)
-        else:
-            self._bot = Bot(token=token)
+    def __init__(
+            self,
+            token: str,
+            chat_id: str,
+            proxy_url: str | None = None,
+            read_timeout: int | None = None,
+            write_timeout: int | None = None,
+            media_write_timeout: int | None = None
+    ):
+        log.info(media_write_timeout)
+        request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
+        self._bot = Bot(token=token, request=request)
         self._chat_id = chat_id
 
     @property
@@ -55,7 +61,7 @@ class TelegramSender:
                 log.warning("Telegram rate limit, retry after %ss", e.retry_after)
                 await asyncio.sleep(e.retry_after)
             except TimedOut:
-                log.warning("Telegram timeout (attempt %d/%d)", attempt, MAX_RETRIES)
+                log.warning("Telegram timeout (attempt %d/%d). Consider increasing TG_ timeouts settings", attempt, MAX_RETRIES)
                 await asyncio.sleep(2 * attempt)
             except Exception:
                 log.exception("Failed to send to Telegram (attempt %d/%d)", attempt, MAX_RETRIES)

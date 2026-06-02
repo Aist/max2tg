@@ -12,6 +12,9 @@ class Settings:
     tg_chat_id: str
     max_chat_ids: str | None = None
     tg_proxy: str | None = None
+    tg_read_timeout: int | None = None
+    tg_write_timeout: int | None = None
+    tg_media_write_timeout: int | None = None
     debug: bool = False
     reply_enabled: bool = False
 
@@ -42,6 +45,9 @@ def load_settings() -> Settings:
         tg_chat_id=os.environ["TG_CHAT_ID"],
         max_chat_ids=os.environ.get("MAX_CHAT_IDS") or None,
         tg_proxy=os.environ.get("TG_PROXY") or None,
+        tg_read_timeout=int(os.environ.get("TG_READ_TIMEOUT", 0)) or None,
+        tg_write_timeout=int(os.environ.get("TG_WRITE_TIMEOUT", 0)) or None,
+        tg_media_write_timeout=int(os.environ.get("TG_MEDIA_WRITE_TIMEOUT", 0)) or None,
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
     )
