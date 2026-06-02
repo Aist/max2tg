@@ -4,8 +4,14 @@ services:
   max2tg:
     build: .
     restart: unless-stopped
-    env_file: .env
     environment:
+      MAX_TOKEN:
+      MAX_DEVICE_ID:
+      MAX_CHAT_IDS:
+      TG_BOT_TOKEN:
+      TG_CHAT_ID:
+      DEBUG:
+      REPLY_ENABLED:
       LOG_DIR: /app/logs
     volumes:
       - ./logs:/app/logs
