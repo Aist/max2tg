@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from html import escape
 
-from app.max_client import MaxClient, MaxMessage
+from app.max_client import MaxClient, MaxMessage, OpCode
 from app.resolver import ContactResolver
 from app.tg_sender import TelegramSender, reply_keyboard
 
@@ -47,6 +47,8 @@ async def _send_attach(
     client: MaxClient,
     sender: TelegramSender,
     header_text: str,
+    chat_id: any,
+    message_id: any,
     kb=None,
 ) -> bool:
     """Process and send a single attachment. Returns True if handled."""
@@ -82,6 +84,18 @@ async def _send_attach(
         name = attach.get("name", "file")
         size = attach.get("size", 0)
         token_url = _extract_file_url(attach)
+        if not token_url and attach.get("fileId") and chat_id and message_id:
+            log.info("Get url by fileId chatId=%s fileId=%s messageId=%s", chat_id, attach.get("fileId"), message_id)
+            resp = await client.cmd(
+                OpCode.GET_FILE_URL,
+                {
+                    "chatId": chat_id,
+                    "fileId": attach.get("fileId"),
+                    "messageId": message_id,
+                },
+            )
+            token_url = resp.get("url")
+            log.info("Got url by fileId: %s", token_url)
         if token_url:
             data = await client.download_file(token_url)
             if data:
@@ -197,7 +211,7 @@ async def _handle_linked_message(
                 text_sent = True
             else:
                 cap = full_header
-            await _send_attach(attach, client, sender, cap, kb=kb)
+            await _send_attach(attach, client, sender, cap, None, None, kb=kb)
 
         if fwd_text and not text_sent:
             await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
@@ -309,7 +323,7 @@ def create_max_client(
                     text_sent = True
                 else:
                     cap = header_text
-                await _send_attach(attach, client, sender, cap, kb=kb)
+                await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
                 log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
 
             if msg.text and not text_sent:

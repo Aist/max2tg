@@ -67,6 +67,7 @@ class OpCode(IntEnum):
     CHAT_GET = 48
     SEND_MESSAGE = 64
     EDIT_MESSAGE = 67
+    GET_FILE_URL = 88
     DISPATCH = 128
 
 
