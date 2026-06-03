@@ -81,7 +81,7 @@ class MaxMessage:
     attaches: list = field(default_factory=list)
     link: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
-    updateTime: Any = None
+    update_time: Any = None
 
 
 class MaxClient:
@@ -291,7 +291,7 @@ class MaxClient:
                     msg = self._parse_message(payload)
                     if (msg is not None
                             and ((not self.chat_ids) or (msg.chat_id in self.chat_ids))
-                            and msg.updateTime is None):
+                            and msg.update_time is None):
                         task = asyncio.create_task(self._on_message_cb(msg))
                         task.add_done_callback(_log_task_exception)
 
@@ -377,7 +377,7 @@ class MaxClient:
             attaches=msg_body.get("attaches") or [],
             link=msg_body.get("link") or {},
             raw=payload,
-            updateTime=msg_body.get("updateTime"),
+            update_time=msg_body.get("updateTime"),
         )
 
         if self._my_id and msg.sender_id == self._my_id:
