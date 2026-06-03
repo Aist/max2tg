@@ -31,7 +31,6 @@ class TelegramSender:
             write_timeout: int | None = None,
             media_write_timeout: int | None = None
     ):
-        log.info(media_write_timeout)
         request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
         self._bot = Bot(token=token, request=request)
         self._chat_id = chat_id

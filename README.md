@@ -77,6 +77,9 @@ cp .env.example .env
 | `REPLY_ENABLED` | нет          | `true` — разрешить ответы из Telegram в Max    |
 | `LOG_DIR`       | нет          | Путь к директории логов (по умолчанию `logs`)  |
 | `TG_PROXY`      | нет          | SOCKS5-прокси для Telegram (`socks5://host:port`) |
+| `TG_READ_TIMEOUT` | нет        | Таймаут чтения HTTP-ответа от Telegram, в секундах |
+| `TG_WRITE_TIMEOUT` | нет       | Таймаут отправки обычного запроса к Telegram, в секундах |
+| `TG_MEDIA_WRITE_TIMEOUT` | нет | Таймаут загрузки медиафайлов в Telegram, в секундах. Увеличьте, если файлы отправляются повторно из-за медленного прокси |
 
 ## Запуск
 
@@ -322,6 +325,9 @@ cp .env.example .env
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
 | `LOG_DIR` | no | Log directory path (default: `logs`) |
 | `TG_PROXY` | no | SOCKS5 proxy for Telegram (`socks5://host:port`) |
+| `TG_READ_TIMEOUT` | no | HTTP read timeout for Telegram responses, in seconds |
+| `TG_WRITE_TIMEOUT` | no | HTTP write timeout for regular Telegram requests, in seconds |
+| `TG_MEDIA_WRITE_TIMEOUT` | no | Upload timeout for media files to Telegram, in seconds. Increase if files are sent multiple times due to a slow proxy |
 
 ## Running
 
