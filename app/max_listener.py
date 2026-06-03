@@ -187,6 +187,7 @@ async def _handle_forward_message(
     else:
         await sender.send(f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb)
 
+
 async def _handle_reply_message(
     link: dict,
     header_text: str,
@@ -201,14 +202,15 @@ async def _handle_reply_message(
     full_header = f"{header_text}\n{prefix}"
     attaches_str = ""
     if fwd_meaningful:
-        for i, fwd_attach in enumerate(fwd_meaningful):
+        for fwd_attach in fwd_meaningful:
             name = fwd_attach.get("name", "file")
             size = fwd_attach.get("size", 0)
             size_str = f" ({_human_size(size)})" if size else ""
             attaches_str += f"📎 <b>{escape(name)}</b>{size_str}\n"
     return attaches_str, full_header, fwd_text
 
-async def _parse_link(link, resolver):
+
+async def _parse_link(link: dict, resolver: ContactResolver):
     inner = link.get("message") or link
     fwd_sender_id = inner.get("sender") or link.get("sender")
     fwd_text = inner.get("text", "") or link.get("text", "")
