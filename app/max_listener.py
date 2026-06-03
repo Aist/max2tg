@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from html import escape
+from typing import Any
 
 from app.max_client import MaxClient, MaxMessage, OpCode
 from app.resolver import ContactResolver
@@ -47,8 +48,8 @@ async def _send_attach(
     client: MaxClient,
     sender: TelegramSender,
     header_text: str,
-    chat_id: any,
-    message_id: any,
+    chat_id: Any,
+    message_id: Any,
     kb=None,
 ) -> bool:
     """Process and send a single attachment. Returns True if handled."""
@@ -84,13 +85,14 @@ async def _send_attach(
         name = attach.get("name", "file")
         size = attach.get("size", 0)
         token_url = _extract_file_url(attach)
-        if not token_url and attach.get("fileId") and chat_id and message_id:
-            log.info("Get url by fileId chatId=%s fileId=%s messageId=%s", chat_id, attach.get("fileId"), message_id)
+        file_id = attach.get("fileId")
+        if not token_url and file_id and chat_id and message_id:
+            log.info("Get url by fileId chatId=%s fileId=%s messageId=%s", chat_id, file_id, message_id)
             resp = await client.cmd(
                 OpCode.GET_FILE_URL,
                 {
                     "chatId": chat_id,
-                    "fileId": attach.get("fileId"),
+                    "fileId": file_id,
                     "messageId": message_id,
                 },
             )
