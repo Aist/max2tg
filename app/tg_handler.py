@@ -51,9 +51,9 @@ async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     source_text = query.message.text or query.message.caption or ""
     label = source_text.split("\n")[0] if source_text else str(max_chat_id)
     context.user_data[PENDING_REPLY_LABEL_KEY] = label
-    addressee=""
-    if update.message.chat.type in [telegram.constants.ChatType.GROUP, telegram.constants.ChatType.SUPERGROUP]:
-        addressee=f" {query.from_user.full_name},"
+    addressee = ""
+    if query.message.chat.type in (telegram.constants.ChatType.GROUP, telegram.constants.ChatType.SUPERGROUP):
+        addressee = f" {html.escape(query.from_user.full_name)},"
     await query.message.reply_text(
         f"✏️{addressee} напишите ответ для <b>{html.escape(label)}</b> (ответом на оригинальное сообщение):\n"
         "<i>(или /cancel для отмены)</i>",
