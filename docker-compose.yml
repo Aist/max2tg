@@ -10,6 +10,7 @@ services:
       MAX_CHAT_IDS:
       TG_BOT_TOKEN:
       TG_CHAT_ID:
+      TG_PROXY:
       DEBUG:
       REPLY_ENABLED:
       LOG_DIR: /app/logs
