@@ -236,6 +236,8 @@ async def _parse_link(link: dict, resolver: ContactResolver):
     fwd_sender_label = ""
     if fwd_sender_id:
         fwd_sender_label = escape(await resolver.resolve_user(fwd_sender_id))
+    if fwd_sender_label == "" and link.get("chatName", "") != "":
+        fwd_sender_label = link.get("chatName")
     fwd_meaningful = [
         a for a in fwd_attaches
         if isinstance(a, dict) and a.get("_type") not in ("CONTROL", "WIDGET", "INLINE_KEYBOARD", None)
