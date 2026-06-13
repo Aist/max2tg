@@ -58,6 +58,7 @@ async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"✏️{addressee} напишите ответ для <b>{html.escape(label)}</b> (ответом на оригинальное сообщение):\n"
         "<i>(или /cancel для отмены)</i>",
         parse_mode="HTML",
+        disable_notification=True,
     )
 
 
@@ -65,9 +66,9 @@ async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Cancel pending reply."""
     if context.user_data.pop(PENDING_REPLY_KEY, None):
         context.user_data.pop(PENDING_REPLY_LABEL_KEY, None)
-        await update.message.reply_text("❌ Ответ отменён.")
+        await update.message.reply_text("❌ Ответ отменён.", disable_notification=True)
     else:
-        await update.message.reply_text("Нет активного ответа для отмены.")
+        await update.message.reply_text("Нет активного ответа для отмены.", disable_notification=True)
 
 
 async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
