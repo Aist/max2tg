@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from html import escape
 from typing import Any
@@ -283,6 +284,18 @@ def create_max_client(
 
             log.info("Known chats: %s", resolver.chats)
             log.info("Known users: %s", resolver.users)
+
+        # After reconnect need to process messages sent in reconnect period, to avoid  messages loss while reconnecting
+        for chat_id in client.chat_ids:
+            resp = await client.cmd(OpCode.GET_MESSAGES, {
+                "chatId": chat_id,
+                "from": (int(time.time()) - client.RECONNECT_SEC) * 1000,
+                "forward": 10,
+                "backward": 0,
+                "getMessages": True
+            })
+            for message in resp.get("messages", []):
+                client.process_message({"message": message, "chatId": chat_id})
 
         if not _first_connect:
             await sender.send("✅ <b>Max:</b> соединение восстановлено")
