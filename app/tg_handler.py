@@ -80,7 +80,7 @@ async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     max_client: MaxClient | None = context.bot_data.get("max_client")
     if not max_client:
-        await update.message.reply_text("⚠️ Max клиент не подключён.")
+        await update.message.reply_text("⚠️ Max клиент не подключён.", disable_notification=True)
         return
 
     text = update.message.text
@@ -98,12 +98,12 @@ async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         resp = await max_client.send_message(max_chat_id, text, elements)
         if resp:
             safe_target = html.escape(str(label or max_chat_id))
-            await update.message.reply_text(f"✅ Отправлено → <b>{safe_target}</b>", parse_mode="HTML")
+            await update.message.reply_text(f"✅ Отправлено → <b>{safe_target}</b>", parse_mode="HTML", disable_notification=True)
         else:
-            await update.message.reply_text("⚠️ Не удалось отправить сообщение в Max.")
+            await update.message.reply_text("⚠️ Не удалось отправить сообщение в Max.", disable_notification=True)
     except Exception:
         log.exception("Failed to send reply to Max chat %s", max_chat_id)
-        await update.message.reply_text("⚠️ Ошибка при отправке в Max.")
+        await update.message.reply_text("⚠️ Ошибка при отправке в Max.", disable_notification=True)
 
 
 def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str,
