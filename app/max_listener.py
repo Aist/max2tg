@@ -136,17 +136,7 @@ async def _send_attach(
         return True
 
     if atype == "SHARE":
-        share_url = attach.get("url", "")
-        title = attach.get("title", "")
-        desc = attach.get("description", "")
-        parts = [header_text]
-        if title:
-            parts.append(f"🔗 <b>{escape(title)}</b>")
-        if share_url:
-            parts.append(escape(share_url))
-        if desc:
-            parts.append(f"<i>{escape(desc[:200])}</i>")
-        await sender.send("\n".join(parts), reply_markup=kb)
+        await sender.send(header_text, reply_markup=kb)
         return True
 
     if atype == "LOCATION":
