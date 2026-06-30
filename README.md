@@ -94,6 +94,22 @@ cp .env.example .env
 docker-compose up -d
 ```
 
+Готовый образ публикуется GitHub Actions в GHCR:
+
+```bash
+docker pull ghcr.io/aist/max2tg:latest
+docker run -d \
+  --name max2tg \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/logs:/app/logs" \
+  ghcr.io/aist/max2tg:latest
+```
+
+Workflow публикует образ на push в `main` и при ручном запуске. Основные теги образа: `latest` и `sha-<commit>`.
+
+Если пакет создаётся в GHCR впервые и GitHub оставил его приватным, откройте package settings и переключите visibility в `Public`; после этого образ будет доступен для `docker pull` без логина.
+
 Логи Docker (stdout):
 
 ```bash
@@ -341,6 +357,22 @@ cp .env.example .env
 
 docker-compose up -d
 ```
+
+The prebuilt image is published by GitHub Actions to GHCR:
+
+```bash
+docker pull ghcr.io/aist/max2tg:latest
+docker run -d \
+  --name max2tg \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/logs:/app/logs" \
+  ghcr.io/aist/max2tg:latest
+```
+
+The workflow publishes the image on pushes to `main` and on manual runs. Main image tags are `latest` and `sha-<commit>`.
+
+If this is the first GHCR package publication and GitHub leaves the package private, open the package settings and change visibility to `Public`; after that the image can be pulled without logging in.
 
 Docker logs (stdout):
 
