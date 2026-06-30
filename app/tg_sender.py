@@ -1,6 +1,7 @@
 import asyncio
 import io
 import logging
+from typing import Sequence
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
@@ -149,6 +150,19 @@ class TelegramSender:
             lambda: self._bot.send_sticker(
                 chat_id=self._chat_id,
                 sticker=InputFile(io.BytesIO(data), filename="sticker.webp"),
+                reply_markup=reply_markup,
+            )
+        )
+
+    async def send_poll(self, question: str, options: Sequence[str], reply_markup=None) -> None:
+        await self._retry(
+            lambda: self._bot.send_poll(
+                chat_id=self._chat_id,
+                question=question,
+                options=options,
+                question_parse_mode=ParseMode.HTML,
+                is_anonymous=False,
+                allows_multiple_answers=False,
                 reply_markup=reply_markup,
             )
         )

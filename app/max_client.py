@@ -193,8 +193,8 @@ class MaxClient:
                                 "userAgent": {
                                     "deviceType": "WEB",
                                     "deviceName": "Chrome 131.0.0.0",
+                                    "appVersion": "26.4.7",
                                 },
-                                "appVersion": "25.12.11",
                             },
                         )
 
@@ -273,7 +273,7 @@ class MaxClient:
                 )
 
             elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
-                self._my_id = payload.get("profile", {}).get("id")
+                self._my_id = payload.get("profile", {}).get("contact", {}).get("id")
                 log.info("Authorized! my_id=%s", self._my_id)
                 if self.debug:
                     self._dump_json("snapshot.json", payload)
