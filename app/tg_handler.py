@@ -48,7 +48,7 @@ async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     context.user_data[PENDING_REPLY_KEY] = max_chat_id
 
-    source_text = query.message.text or query.message.caption or query.message.poll.question or ""
+    source_text = query.message.text or query.message.caption or (query.message.poll.question if query.message.poll else "") or ""
     label = source_text.split("\n")[0] if source_text else str(max_chat_id)
     context.user_data[PENDING_REPLY_LABEL_KEY] = label
     addressee = ""

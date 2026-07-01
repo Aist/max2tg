@@ -169,7 +169,7 @@ async def _send_attach(
 
     if atype == "POLL":
         title = attach.get("title", "Опрос")
-        options = [answer.get("text") for answer in attach.get("answers")]
+        options = [answer.get("text") for answer in attach.get("answers", [])]
         await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
         return True
 
