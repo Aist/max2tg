@@ -279,7 +279,8 @@ class MaxClient:
                     self._dump_json("snapshot.json", payload)
 
                 if self._on_ready_cb:
-                    await self._on_ready_cb(payload)
+                    task = asyncio.create_task(self._on_ready_cb(payload))
+                    task.add_done_callback(_log_task_exception)
 
             elif op == OpCode.DISPATCH:
                 self._dispatch_counter += 1
