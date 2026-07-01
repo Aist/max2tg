@@ -221,7 +221,7 @@ async def _handle_reply_message(
     attaches_str = ""
     if fwd_meaningful:
         for fwd_attach in fwd_meaningful:
-            name = fwd_attach.get("name", "file")
+            name = fwd_attach.get("name", fwd_attach.get("_type", "file").lower())
             size = fwd_attach.get("size", 0)
             size_str = f" ({_human_size(size)})" if size else ""
             attaches_str += f"📎 <b>{escape(name)}</b>{size_str}\n"
@@ -336,12 +336,11 @@ def create_max_client(
             log.info("Forwarded message → TG")
             return
 
+        reply = ""
         if link_type == "REPLY":
             attaches_str, full_header, fwd_text = await _handle_reply_message(link, header_text, resolver)
-            if msg.text:
-                await sender.send(f"{full_header}\n<blockquote>{escape(fwd_text)}{attaches_str}</blockquote>{escape(msg.text)}", reply_markup=kb)
-            log.info("Forwarded reply → TG")
-            return
+            header_text = full_header
+            reply = f"<blockquote>{escape(fwd_text)}\n{attaches_str}</blockquote>"
 
         meaningful_attaches = [
             a for a in msg.attaches
@@ -351,19 +350,19 @@ def create_max_client(
         if meaningful_attaches:
             text_sent = False
             for i, attach in enumerate(meaningful_attaches):
-                if i == 0 and msg.text:
-                    cap = f"{header_text}\n{escape(msg.text)}"
-                    text_sent = True
+                if i == 0:
+                    cap = f"{header_text}\n{reply}{escape(msg.text)}"
+                    text_sent = bool(msg.text)
                 else:
                     cap = header_text
                 await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
                 log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
 
             if msg.text and not text_sent:
-                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
+                await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb)
         else:
             if msg.text:
-                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
+                await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb)
                 log.info("Forwarded text → TG")
             else:
                 log.warning("Нетекстовое сообщение! %s", msg.attaches)
