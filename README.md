@@ -44,7 +44,7 @@
 3. Перейдите во вкладку **Application** (Chrome) или **Storage** (Firefox)
 4. В левой панели: **Local Storage → https://web.max.ru**
 5. Найдите и скопируйте значения:
-   - `__oneme_auth` → это ваш `MAX_TOKEN`
+   - `__oneme_auth` → JSON-объект авторизации; для `MAX_TOKEN` возьмите значение поля `token`, а не весь объект
    - `__oneme_device_id` → это ваш `MAX_DEVICE_ID`
 
 > **Важно:** не делитесь этими значениями — они дают полный доступ к вашему аккаунту Max.
@@ -93,6 +93,22 @@ cp .env.example .env
 
 docker-compose up -d
 ```
+
+Готовый образ публикуется GitHub Actions в GHCR:
+
+```bash
+docker pull ghcr.io/aist/max2tg:latest
+docker run -d \
+  --name max2tg \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/logs:/app/logs" \
+  ghcr.io/aist/max2tg:latest
+```
+
+Workflow публикует образ на push в `main` и при ручном запуске. Основные теги образа: `latest` и `sha-<commit>`.
+
+Если пакет создаётся в GHCR впервые и GitHub оставил его приватным, откройте package settings и переключите visibility в `Public`; после этого образ будет доступен для `docker pull` без логина.
 
 Логи Docker (stdout):
 
@@ -292,7 +308,7 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 3. Go to the **Application** tab (Chrome) or **Storage** (Firefox)
 4. In the left panel: **Local Storage → https://web.max.ru**
 5. Find and copy the values:
-   - `__oneme_auth` → this is your `MAX_TOKEN`
+   - `__oneme_auth` → authorization JSON object; use the `token` field value as `MAX_TOKEN`, not the whole object
    - `__oneme_device_id` → this is your `MAX_DEVICE_ID`
 
 > **Important:** do not share these values — they grant full access to your Max account.
@@ -341,6 +357,22 @@ cp .env.example .env
 
 docker-compose up -d
 ```
+
+The prebuilt image is published by GitHub Actions to GHCR:
+
+```bash
+docker pull ghcr.io/aist/max2tg:latest
+docker run -d \
+  --name max2tg \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$(pwd)/logs:/app/logs" \
+  ghcr.io/aist/max2tg:latest
+```
+
+The workflow publishes the image on pushes to `main` and on manual runs. Main image tags are `latest` and `sha-<commit>`.
+
+If this is the first GHCR package publication and GitHub leaves the package private, open the package settings and change visibility to `Public`; after that the image can be pulled without logging in.
 
 Docker logs (stdout):
 
