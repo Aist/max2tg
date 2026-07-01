@@ -350,9 +350,9 @@ def create_max_client(
         if meaningful_attaches:
             text_sent = False
             for i, attach in enumerate(meaningful_attaches):
-                if i == 0 and msg.text:
+                if i == 0:
                     cap = f"{header_text}\n{reply}{escape(msg.text)}"
-                    text_sent = True
+                    text_sent = bool(msg.text)
                 else:
                     cap = header_text
                 await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
