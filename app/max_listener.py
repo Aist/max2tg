@@ -339,6 +339,7 @@ def create_max_client(
         reply = ""
         if link_type == "REPLY":
             attaches_str, full_header, fwd_text = await _handle_reply_message(link, header_text, resolver)
+            header_text = full_header
             reply = f"<blockquote>{escape(fwd_text)}\n{attaches_str}</blockquote>"
 
         meaningful_attaches = [
