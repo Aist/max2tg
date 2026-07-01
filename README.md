@@ -44,7 +44,7 @@
 3. Перейдите во вкладку **Application** (Chrome) или **Storage** (Firefox)
 4. В левой панели: **Local Storage → https://web.max.ru**
 5. Найдите и скопируйте значения:
-   - `__oneme_auth` → это ваш `MAX_TOKEN`
+   - `__oneme_auth` → JSON-объект авторизации; для `MAX_TOKEN` возьмите значение поля `token`, а не весь объект
    - `__oneme_device_id` → это ваш `MAX_DEVICE_ID`
 
 > **Важно:** не делитесь этими значениями — они дают полный доступ к вашему аккаунту Max.
@@ -308,7 +308,7 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 3. Go to the **Application** tab (Chrome) or **Storage** (Firefox)
 4. In the left panel: **Local Storage → https://web.max.ru**
 5. Find and copy the values:
-   - `__oneme_auth` → this is your `MAX_TOKEN`
+   - `__oneme_auth` → authorization JSON object; use the `token` field value as `MAX_TOKEN`, not the whole object
    - `__oneme_device_id` → this is your `MAX_DEVICE_ID`
 
 > **Important:** do not share these values — they grant full access to your Max account.
