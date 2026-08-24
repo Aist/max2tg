@@ -107,7 +107,7 @@ async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str,
-                  proxy_url: str | None = None, read_timeout: int | None = None, write_timeout: int | None = None) -> Application:
+                  proxy_url: str | None = None, read_timeout: int | None = None, write_timeout: int | None = None, base_url: str | None = None,) -> Application:
     """Build and configure the Telegram Application with handlers."""
     builder = Application.builder().token(token)
     if proxy_url:
@@ -116,6 +116,8 @@ def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str,
         builder = builder.read_timeout(read_timeout)
     if write_timeout:
         builder = builder.write_timeout(write_timeout)
+    if base_url:
+        builder = builder.base_url(base_url + "/bot").base_file_url(base_url + "/file/bot")
     app = builder.build()
     app.bot_data["max_client"] = max_client
     app.bot_data[_ALLOWED_CHAT_ID_KEY] = int(allowed_chat_id)

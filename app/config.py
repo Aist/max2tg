@@ -15,6 +15,7 @@ class Settings:
     tg_read_timeout: int | None = None
     tg_write_timeout: int | None = None
     tg_media_write_timeout: int | None = None
+    tg_base_url: str | None = None
     debug: bool = False
     reply_enabled: bool = False
 
@@ -48,6 +49,7 @@ def load_settings() -> Settings:
         tg_read_timeout=int(os.environ.get("TG_READ_TIMEOUT", 0)) or None,
         tg_write_timeout=int(os.environ.get("TG_WRITE_TIMEOUT", 0)) or None,
         tg_media_write_timeout=int(os.environ.get("TG_MEDIA_WRITE_TIMEOUT", 0)) or None,
+        tg_base_url=os.environ.get("TG_BASE_URL") or None,
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
     )
