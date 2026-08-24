@@ -45,7 +45,6 @@ _WS_HEADERS = {
 
 _HTTP_HEADERS = {
     **_BROWSER_HEADERS,
-    "Origin": "https://web.max.ru",
     "Referer": "https://web.max.ru/",
     "Accept": "*/*",
     "Sec-Fetch-Dest": "empty",
@@ -68,6 +67,7 @@ class OpCode(IntEnum):
     GET_MESSAGES = 49
     SEND_MESSAGE = 64
     EDIT_MESSAGE = 67
+    GET_VIDEO_URL = 83
     GET_FILE_URL = 88
     DISPATCH = 128
 
@@ -194,6 +194,7 @@ class MaxClient:
                                 "userAgent": {
                                     "deviceType": "WEB",
                                     "deviceName": "Chrome 131.0.0.0",
+                                    "headerUserAgent": _USER_AGENT,
                                 },
                                 "appVersion": "25.12.11",
                             },

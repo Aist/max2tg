@@ -75,6 +75,36 @@ async def _send_attach(
         return True
 
     if atype == "VIDEO":
+        video_id = attach.get("videoId")
+        token = attach.get("token")
+        log.info("Get url by chatId=%s video_id=%s messageId=%s", chat_id, video_id, message_id)
+        if video_id and chat_id and message_id:
+            resp = await client.cmd(
+                OpCode.GET_VIDEO_URL,
+                {
+                    "chatId": chat_id,
+                    "videoId": video_id,
+                    "messageId": message_id,
+                    "token": token,
+                },
+            )
+            url = resp.get("MP4_1080",
+                           resp.get("MP4_720",
+                                    resp.get("MP4_480",
+                                             resp.get("MP4_360",
+                                                      resp.get("MP4_240",
+                                                               resp.get("MP4_144"))))))
+            log.info("Got url by videoId: %s", url)
+            if url:
+                data = await client.download_file(url)
+                if data:
+                    await sender.send_video(data, caption=header_text, reply_markup=kb)
+                    return True
+                log.warning("failed to download video: %s", url)
+            else:
+                log.warning("failed to find video url: %s", resp)
+
+        # video not downloaded
         thumb = attach.get("thumbnail")
         if thumb:
             data = await client.download_file(thumb)
