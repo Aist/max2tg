@@ -1,9 +1,10 @@
 import asyncio
 import io
 import logging
+from typing import Sequence
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.constants import ParseMode
+from telegram.constants import ParseMode, PollLimit
 from telegram.error import RetryAfter, TimedOut
 from telegram.request import HTTPXRequest
 
@@ -50,6 +51,11 @@ class TelegramSender:
 
     async def stop(self):
         await self._bot.shutdown()
+
+    def _truncate(self, text: str, limit: int, suffix: str = "…") -> str:
+        if len(text) > limit:
+            return text[: limit - len(suffix)] + suffix
+        return text
 
     def _truncate_caption(self, text: str) -> str:
         if len(text) > TG_CAPTION_MAX:
@@ -153,6 +159,25 @@ class TelegramSender:
             lambda: self._bot.send_sticker(
                 chat_id=self._chat_id,
                 sticker=InputFile(io.BytesIO(data), filename="sticker.webp"),
+                reply_markup=reply_markup,
+            )
+        )
+
+    async def send_poll(self, question: str, options: Sequence[str], reply_markup=None) -> None:
+        """Send a poll. Caller must ensure at least PollLimit.MIN_OPTION_NUMBER non-empty options."""
+        question = self._truncate(question, PollLimit.MAX_QUESTION_LENGTH)
+        options = [
+            self._truncate(opt, PollLimit.MAX_OPTION_LENGTH)
+            for opt in options[: PollLimit.MAX_OPTION_NUMBER]
+        ]
+        await self._retry(
+            lambda: self._bot.send_poll(
+                chat_id=self._chat_id,
+                question=question,
+                options=options,
+                question_parse_mode=ParseMode.HTML,
+                is_anonymous=False,
+                allows_multiple_answers=False,
                 reply_markup=reply_markup,
             )
         )

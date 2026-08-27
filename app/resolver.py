@@ -51,7 +51,7 @@ class ContactResolver:
     # ── populate from AUTH_SNAPSHOT ────────────────────────────────
 
     def load_snapshot(self, snapshot: dict) -> list:
-        profile = snapshot.get("profile", {})
+        profile = snapshot.get("profile", {}).get("contact", {})
         self._my_id = profile.get("id")
         names = profile.get("names", [])
         if names and self._my_id:
