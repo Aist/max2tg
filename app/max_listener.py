@@ -88,19 +88,20 @@ async def _send_attach(
                     "token": token,
                 },
             )
-            url = resp.get("MP4_1080",
-                           resp.get("MP4_720",
-                                    resp.get("MP4_480",
-                                             resp.get("MP4_360",
-                                                      resp.get("MP4_240",
-                                                               resp.get("MP4_144"))))))
+            url = None
+            for quality in ("MP4_1080", "MP4_720", "MP4_480", "MP4_360", "MP4_240", "MP4_144"):
+                if resp.get(quality):
+                    url = resp[quality]
+                    break
             log.info("Got url by videoId: %s", url)
             if url:
-                data = await client.download_file(url)
+                data = await client.download_file(url, omit_origin=True)
                 if data:
-                    await sender.send_video(data, caption=header_text, reply_markup=kb)
-                    return True
-                log.warning("failed to download video: %s", url)
+                    if await sender.send_video(data, caption=header_text, reply_markup=kb):
+                        return True
+                    log.warning("failed to send video to Telegram, falling back to thumbnail: %s", url)
+                else:
+                    log.warning("failed to download video: %s", url)
             else:
                 log.warning("failed to find video url: %s", resp)
 
@@ -186,6 +187,19 @@ async def _send_attach(
         if phone:
             text += f" — {escape(phone)}"
         await sender.send(text, reply_markup=kb)
+        return True
+
+    if atype == "POLL":
+        title = attach.get("title", "Опрос")
+        options = [
+            answer.get("text") for answer in attach.get("answers", [])
+            if isinstance(answer, dict) and answer.get("text")
+        ]
+        if len(options) >= 2:
+            await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
+            return True
+        log.warning("POLL attach has too few valid options: %s", attach)
+        await sender.send(f"{header_text}\n📊 <b>{escape(title)}</b>\n<i>[опрос — не удалось переслать]</i>", reply_markup=kb)
         return True
 
     log.info("Unknown attach type %s, sending as info", atype)

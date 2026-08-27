@@ -1,7 +1,9 @@
 """Tests for app/max_listener.py — pure helper functions."""
 
 import pytest
-from app.max_listener import _human_size, _guess_media_kind
+from unittest.mock import AsyncMock, MagicMock
+
+from app.max_listener import _human_size, _guess_media_kind, _send_attach
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +146,195 @@ class TestGuessMediaKind:
     # Extension appearing in the middle of filename should not trigger false match
     def test_mp4_in_name_not_extension_is_document(self):
         assert _guess_media_kind("mp4_notes.txt") == "document"
+
+
+# ---------------------------------------------------------------------------
+# _send_attach — POLL handling
+# ---------------------------------------------------------------------------
+
+class TestSendAttachPoll:
+    """Tests for the POLL branch of _send_attach."""
+
+    def _make_sender(self):
+        sender = MagicMock()
+        sender.send_poll = AsyncMock()
+        sender.send = AsyncMock()
+        return sender
+
+    @pytest.mark.asyncio
+    async def test_poll_with_enough_options_is_forwarded_as_poll(self):
+        sender = self._make_sender()
+        attach = {
+            "_type": "POLL",
+            "title": "Любимый цвет?",
+            "answers": [{"text": "Красный"}, {"text": "Синий"}],
+        }
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_awaited_once()
+        sender.send.assert_not_called()
+        _, options = sender.send_poll.await_args.args[:2]
+        assert options == ["Красный", "Синий"]
+
+    @pytest.mark.asyncio
+    async def test_poll_with_less_than_two_options_falls_back_to_text(self):
+        sender = self._make_sender()
+        attach = {"_type": "POLL", "title": "Опрос", "answers": [{"text": "Единственный"}]}
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_not_called()
+        sender.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_with_no_answers_key_falls_back_to_text(self):
+        sender = self._make_sender()
+        attach = {"_type": "POLL", "title": "Опрос"}
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_not_called()
+        sender.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_ignores_answers_without_text(self):
+        sender = self._make_sender()
+        attach = {
+            "_type": "POLL",
+            "title": "Опрос",
+            "answers": [{"text": "Да"}, {}, {"text": "Нет"}, {"text": ""}],
+        }
+
+        await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        _, options = sender.send_poll.await_args.args[:2]
+        assert options == ["Да", "Нет"]
+
+
+# ---------------------------------------------------------------------------
+# _send_attach — VIDEO handling
+# ---------------------------------------------------------------------------
+
+class TestSendAttachVideo:
+    """Tests for the VIDEO branch of _send_attach."""
+
+    def _make_client(self, cmd_response=None):
+        client = MagicMock()
+        client.cmd = AsyncMock(return_value=cmd_response or {})
+        client.download_file = AsyncMock(return_value=b"video-bytes")
+        return client
+
+    def _make_sender(self, send_video_ok=True):
+        sender = MagicMock()
+        sender.send_video = AsyncMock(return_value=send_video_ok)
+        sender.send_photo = AsyncMock()
+        sender.send = AsyncMock()
+        return sender
+
+    @pytest.mark.asyncio
+    async def test_video_downloaded_and_sent_successfully(self):
+        client = self._make_client({"MP4_720": "https://ok.ru/video720.mp4"})
+        sender = self._make_sender(send_video_ok=True)
+        attach = {"_type": "VIDEO", "videoId": "vid1", "token": "tok"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        sender.send_video.assert_awaited_once()
+        sender.send_photo.assert_not_called()
+        sender.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_uses_omit_origin(self):
+        client = self._make_client({"MP4_720": "https://ok.ru/video720.mp4"})
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "videoId": "vid1"}
+
+        await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        client.download_file.assert_awaited_once_with("https://ok.ru/video720.mp4", omit_origin=True)
+
+    @pytest.mark.asyncio
+    async def test_prefers_highest_available_resolution(self):
+        client = self._make_client({
+            "MP4_144": "https://ok.ru/144.mp4",
+            "MP4_1080": "https://ok.ru/1080.mp4",
+            "MP4_480": "https://ok.ru/480.mp4",
+        })
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "videoId": "vid1"}
+
+        await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        client.download_file.assert_awaited_once_with("https://ok.ru/1080.mp4", omit_origin=True)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_thumbnail_when_telegram_upload_fails(self):
+        client = self._make_client({"MP4_720": "https://ok.ru/video720.mp4"})
+        sender = self._make_sender(send_video_ok=False)
+        attach = {"_type": "VIDEO", "videoId": "vid1", "thumbnail": "https://max.ru/thumb.jpg"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        sender.send_video.assert_awaited_once()
+        sender.send_photo.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_thumbnail_when_download_fails(self):
+        client = self._make_client({"MP4_720": "https://ok.ru/video720.mp4"})
+
+        async def download_file(url, omit_origin=False):
+            return None if omit_origin else b"thumb-bytes"
+
+        client.download_file = AsyncMock(side_effect=download_file)
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "videoId": "vid1", "thumbnail": "https://max.ru/thumb.jpg"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        sender.send_video.assert_not_called()
+        sender.send_photo.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_thumbnail_when_no_url_in_response(self):
+        client = self._make_client({})
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "videoId": "vid1", "thumbnail": "https://max.ru/thumb.jpg"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        sender.send_video.assert_not_called()
+        sender.send_photo.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_skips_video_url_lookup_without_video_id(self):
+        client = self._make_client({"MP4_720": "https://ok.ru/video720.mp4"})
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "thumbnail": "https://max.ru/thumb.jpg"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        client.cmd.assert_not_called()
+        sender.send_photo.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_thumbnail_and_no_video_falls_back_to_text(self):
+        client = self._make_client({})
+        client.download_file = AsyncMock(return_value=None)
+        sender = self._make_sender()
+        attach = {"_type": "VIDEO", "videoId": "vid1"}
+
+        result = await _send_attach(attach, client=client, sender=sender, header_text="hdr", chat_id=1, message_id=2)
+
+        assert result is True
+        sender.send_video.assert_not_called()
+        sender.send_photo.assert_not_called()
+        sender.send.assert_awaited_once()
