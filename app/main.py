@@ -94,6 +94,7 @@ async def main():
         await tg_app.updater.start_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
+            error_callback=lambda error: log.error("Telegram polling error! %s", error, exc_info=error)
         )
         log.info("Telegram polling started (reply → Max enabled)")
     else:

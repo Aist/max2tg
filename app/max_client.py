@@ -65,6 +65,7 @@ class OpCode(IntEnum):
     CONTACT_GET = 32
     CONTACT_PRESENCE = 35
     CHAT_GET = 48
+    GET_MESSAGES = 49
     SEND_MESSAGE = 64
     EDIT_MESSAGE = 67
     GET_FILE_URL = 88
@@ -245,7 +246,7 @@ class MaxClient:
             fut = self._pending.pop(seq)
             if not fut.done():
                 fut.set_result(payload)
-            if op not in (OpCode.HANDSHAKE, OpCode.AUTH_SNAPSHOT):
+            if op not in (OpCode.HANDSHAKE, OpCode.AUTH_SNAPSHOT, OpCode.GET_MESSAGES):
                 log.debug("<<< RESP  op=%-4s seq=%s", op, seq)
 
         # cmd=3 is an error response
@@ -279,7 +280,8 @@ class MaxClient:
                     self._dump_json("snapshot.json", payload)
 
                 if self._on_ready_cb:
-                    await self._on_ready_cb(payload)
+                    task = asyncio.create_task(self._on_ready_cb(payload))
+                    task.add_done_callback(_log_task_exception)
 
             elif op == OpCode.DISPATCH:
                 self._dispatch_counter += 1
@@ -287,20 +289,22 @@ class MaxClient:
                     self._dump_json(
                         f"dispatch_{self._dispatch_counter:04d}.json", payload
                     )
-
-                if self._on_message_cb:
-                    msg = self._parse_message(payload)
-                    if (msg is not None
-                            and ((not self.chat_ids) or (msg.chat_id in self.chat_ids))
-                            and msg.update_time is None):
-                        task = asyncio.create_task(self._on_message_cb(msg))
-                        task.add_done_callback(_log_task_exception)
+                self.process_message(payload)
 
             elif op in (OpCode.HEARTBEAT_PING,):
                 log.debug("Heartbeat op=%s", op)
 
             elif cmd not in (1, 3):
                 log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview[:500]))
+
+    def process_message(self, payload):
+        if self._on_message_cb:
+            msg = self._parse_message(payload)
+            if (msg is not None
+                and ((not self.chat_ids) or (msg.chat_id in self.chat_ids))
+                and msg.update_time is None):
+                task = asyncio.create_task(self._on_message_cb(msg))
+                task.add_done_callback(_log_task_exception)
 
     # ── WebSocket RPC: fetch contacts ──────────────────────────────
 
