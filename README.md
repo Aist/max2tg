@@ -80,6 +80,7 @@ cp .env.example .env
 | `TG_READ_TIMEOUT` | нет        | Таймаут чтения HTTP-ответа от Telegram, в секундах |
 | `TG_WRITE_TIMEOUT` | нет       | Таймаут отправки обычного запроса к Telegram, в секундах |
 | `TG_MEDIA_WRITE_TIMEOUT` | нет | Таймаут загрузки медиафайлов в Telegram, в секундах. Увеличьте, если файлы отправляются повторно из-за медленного прокси |
+| `TG_MAX_RETRIES` | нет | Сколько раз повторить отправку сразу, прежде чем положить сообщение в очередь повторов (по умолчанию 4) |
 
 ## Запуск
 
@@ -222,6 +223,9 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 1. Приложение подключается к Max через WebSocket как ваш аккаунт
 2. Новые входящие сообщения пересылаются в указанный Telegram-чат
 3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно написать текст, который отправится обратно в соответствующий чат Max
+4. Если Telegram недоступен, сообщение не теряется: после `TG_MAX_RETRIES` неудачных попыток оно попадает в очередь повторов (outbox), которая раз в 30 секунд пробует доставить его снова — до суток. Пока очередь не пуста, новые сообщения тоже идут в неё, чтобы не нарушать порядок. Ошибки, которые Telegram будет отклонять всегда (например, неверный chat_id), в очередь не попадают и логируются как `LOST`
+
+Доставку видно в логах: `Forwarded ... → TG` — доставлено; `queued for retry` — ждёт в очереди; `LOST` — потеряно
 
 ## Структура проекта
 
@@ -344,6 +348,7 @@ cp .env.example .env
 | `TG_READ_TIMEOUT` | no | HTTP read timeout for Telegram responses, in seconds |
 | `TG_WRITE_TIMEOUT` | no | HTTP write timeout for regular Telegram requests, in seconds |
 | `TG_MEDIA_WRITE_TIMEOUT` | no | Upload timeout for media files to Telegram, in seconds. Increase if files are sent multiple times due to a slow proxy |
+| `TG_MAX_RETRIES` | no | How many times a send is retried inline before it goes to the retry queue (default: 4) |
 
 ## Running
 
@@ -486,6 +491,9 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 1. The app connects to Max via WebSocket using your account credentials
 2. Incoming messages are forwarded to the specified Telegram chat
 3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it, type your response, and it gets sent back to the corresponding Max chat
+4. If Telegram is unreachable the message is not lost: after `TG_MAX_RETRIES` failed attempts it goes to a retry queue (outbox) that keeps retrying every 30 seconds for up to 24 hours. While the queue is not empty new messages join it too, so the chat order is preserved. Errors Telegram would always reject (a wrong chat_id, for instance) are never queued and are logged as `LOST`
+
+Delivery is visible in the log: `Forwarded ... TG` means delivered, `queued for retry` means waiting in the outbox, `LOST` means gone
 
 ## Project Structure
 

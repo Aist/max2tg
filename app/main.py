@@ -77,6 +77,7 @@ async def main():
         read_timeout=settings.tg_read_timeout,
         write_timeout=settings.tg_write_timeout,
         media_write_timeout=settings.tg_media_write_timeout,
+        max_retries=settings.tg_max_retries,
     )
     await sender.start()
 

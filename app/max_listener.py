@@ -6,7 +6,7 @@ from typing import Any
 
 from app.max_client import MaxClient, MaxMessage, OpCode
 from app.resolver import ContactResolver
-from app.tg_sender import TelegramSender, reply_keyboard
+from app.tg_sender import SendStatus, TelegramSender, reply_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,16 @@ def _header(msg: MaxMessage, sender_label: str, chat_label: str, is_dm: bool) ->
     if chat_label:
         return f"💬 <b>{chat_label}</b> | {sender_label}"
     return f"💬 <b>{sender_label}</b>"
+
+
+def _log_delivery(status: SendStatus, what: str) -> None:
+    """Log the real outcome of a forward — never claim a delivery that did not happen."""
+    if status is SendStatus.OK:
+        log.info("Forwarded %s → TG", what)
+    elif status is SendStatus.QUEUED:
+        log.warning("NOT delivered to TG yet, queued for retry: %s", what)
+    else:
+        log.error("LOST, Telegram rejected: %s", what)
 
 
 def _extract_photo_url(attach: dict) -> str | None:
@@ -54,35 +64,31 @@ async def _send_attach(
     chat_id: Any,
     message_id: Any,
     kb=None,
-) -> bool:
-    """Process and send a single attachment. Returns True if handled."""
+) -> SendStatus | None:
+    """Process and send a single attachment. Returns its send status, or None if skipped."""
     atype = attach.get("_type", "")
     log.info("Processing attach _type=%s keys=%s", atype, list(attach.keys()))
 
     if atype == "CONTROL" or atype == "WIDGET" or atype == "INLINE_KEYBOARD":
-        return False
+        return None
 
     if atype == "PHOTO":
         url = _extract_photo_url(attach)
         if not url:
             log.warning("PHOTO attach has no URL: %s", attach)
-            return False
+            return None
         data = await client.download_file(url)
         if data:
-            await sender.send_photo(data, caption=header_text, reply_markup=kb)
-            return True
-        await sender.send(f"{header_text}\n<i>[фото — не удалось загрузить]</i>", reply_markup=kb)
-        return True
+            return await sender.send_photo(data, caption=header_text, reply_markup=kb)
+        return await sender.send(f"{header_text}\n<i>[фото — не удалось загрузить]</i>", reply_markup=kb)
 
     if atype == "VIDEO":
         thumb = attach.get("thumbnail")
         if thumb:
             data = await client.download_file(thumb)
             if data:
-                await sender.send_photo(data, caption=f"{header_text}\n<i>[видео — превью]</i>", reply_markup=kb)
-                return True
-        await sender.send(f"{header_text}\n<i>[видео]</i>", reply_markup=kb)
-        return True
+                return await sender.send_photo(data, caption=f"{header_text}\n<i>[видео — превью]</i>", reply_markup=kb)
+        return await sender.send(f"{header_text}\n<i>[видео]</i>", reply_markup=kb)
 
     if atype == "FILE":
         name = attach.get("name", "file")
@@ -106,48 +112,38 @@ async def _send_attach(
             if data:
                 kind = _guess_media_kind(name)
                 if kind == "photo":
-                    await sender.send_photo(data, caption=header_text, filename=name, reply_markup=kb)
-                elif kind == "video":
-                    await sender.send_video(data, caption=header_text, filename=name, reply_markup=kb)
-                else:
-                    await sender.send_document(data, caption=header_text, filename=name, reply_markup=kb)
-                return True
+                    return await sender.send_photo(data, caption=header_text, filename=name, reply_markup=kb)
+                if kind == "video":
+                    return await sender.send_video(data, caption=header_text, filename=name, reply_markup=kb)
+                return await sender.send_document(data, caption=header_text, filename=name, reply_markup=kb)
         size_str = f" ({_human_size(size)})" if size else ""
-        await sender.send(f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", reply_markup=kb)
-        return True
+        return await sender.send(f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", reply_markup=kb)
 
     if atype == "AUDIO":
         url = attach.get("url")
         if url:
             data = await client.download_file(url)
             if data:
-                await sender.send_voice(data, caption=header_text, reply_markup=kb)
-                return True
-        await sender.send(f"{header_text}\n<i>[аудио]</i>", reply_markup=kb)
-        return True
+                return await sender.send_voice(data, caption=header_text, reply_markup=kb)
+        return await sender.send(f"{header_text}\n<i>[аудио]</i>", reply_markup=kb)
 
     if atype == "STICKER":
         url = attach.get("url")
         if url:
             data = await client.download_file(url)
             if data:
-                await sender.send_sticker(data, reply_markup=kb)
-                return True
-        await sender.send(f"{header_text}\n<i>[стикер]</i>", reply_markup=kb)
-        return True
+                return await sender.send_sticker(data, reply_markup=kb)
+        return await sender.send(f"{header_text}\n<i>[стикер]</i>", reply_markup=kb)
 
     if atype == "SHARE":
-        await sender.send(header_text, reply_markup=kb)
-        return True
+        return await sender.send(header_text, reply_markup=kb)
 
     if atype == "LOCATION":
         lat = attach.get("lat") or attach.get("latitude")
         lon = attach.get("lon") or attach.get("lng") or attach.get("longitude")
         if lat and lon:
-            await sender.send(f"{header_text}\n📍 {lat}, {lon}", reply_markup=kb)
-        else:
-            await sender.send(f"{header_text}\n<i>[геолокация]</i>", reply_markup=kb)
-        return True
+            return await sender.send(f"{header_text}\n📍 {lat}, {lon}", reply_markup=kb)
+        return await sender.send(f"{header_text}\n<i>[геолокация]</i>", reply_markup=kb)
 
     if atype == "CONTACT":
         name = attach.get("name", "")
@@ -155,8 +151,7 @@ async def _send_attach(
         text = f"{header_text}\n👤 {escape(name)}"
         if phone:
             text += f" — {escape(phone)}"
-        await sender.send(text, reply_markup=kb)
-        return True
+        return await sender.send(text, reply_markup=kb)
 
     if atype == "POLL":
         title = attach.get("title", "Опрос")
@@ -165,15 +160,12 @@ async def _send_attach(
             if isinstance(answer, dict) and answer.get("text")
         ]
         if len(options) >= 2:
-            await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
-            return True
+            return await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
         log.warning("POLL attach has too few valid options: %s", attach)
-        await sender.send(f"{header_text}\n📊 <b>{escape(title)}</b>\n<i>[опрос — не удалось переслать]</i>", reply_markup=kb)
-        return True
+        return await sender.send(f"{header_text}\n📊 <b>{escape(title)}</b>\n<i>[опрос — не удалось переслать]</i>", reply_markup=kb)
 
     log.info("Unknown attach type %s, sending as info", atype)
-    await sender.send(f"{header_text}\n<i>[вложение: {escape(atype or 'unknown')}]</i>", reply_markup=kb)
-    return True
+    return await sender.send(f"{header_text}\n<i>[вложение: {escape(atype or 'unknown')}]</i>", reply_markup=kb)
 
 
 async def _handle_forward_message(
@@ -183,8 +175,8 @@ async def _handle_forward_message(
     sender: TelegramSender,
     resolver: ContactResolver,
     kb=None,
-) -> None:
-    """Handle FORWARD link inside a message."""
+) -> SendStatus:
+    """Handle FORWARD link inside a message. Returns the worst status of its sends."""
     fwd_meaningful, fwd_sender_label, fwd_text = await _parse_link(link, resolver)
 
     prefix = "↩️ <b>Переслано</b>"
@@ -192,6 +184,7 @@ async def _handle_forward_message(
         prefix = f"↩️ <b>Переслано от {fwd_sender_label}</b>"
 
     full_header = f"{header_text}\n{prefix}"
+    statuses: list[SendStatus] = []
     if fwd_meaningful:
         text_sent = False
         for i, attach in enumerate(fwd_meaningful):
@@ -200,14 +193,17 @@ async def _handle_forward_message(
                 text_sent = True
             else:
                 cap = full_header
-            await _send_attach(attach, client, sender, cap, None, None, kb=kb)
+            status = await _send_attach(attach, client, sender, cap, None, None, kb=kb)
+            if status is not None:
+                statuses.append(status)
 
         if fwd_text and not text_sent:
-            await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
+            statuses.append(await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb))
     elif fwd_text:
-        await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb)
+        statuses.append(await sender.send(f"{full_header}\n{escape(fwd_text)}", reply_markup=kb))
     else:
-        await sender.send(f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb)
+        statuses.append(await sender.send(f"{full_header}\n<i>[без содержимого]</i>", reply_markup=kb))
+    return SendStatus.worst(*statuses)
 
 
 async def _handle_reply_message(
@@ -346,10 +342,10 @@ def create_max_client(
         link_type = link.get("type") if isinstance(link, dict) else None
 
         if link_type == "FORWARD":
-            await _handle_forward_message(link, header_text, client, sender, resolver, kb=kb)
+            status = await _handle_forward_message(link, header_text, client, sender, resolver, kb=kb)
             if msg.text:
-                await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb)
-            log.info("Forwarded message → TG")
+                status = SendStatus.worst(status, await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb))
+            _log_delivery(status, "forwarded message")
             return
 
         reply = ""
@@ -371,15 +367,15 @@ def create_max_client(
                     text_sent = bool(msg.text)
                 else:
                     cap = header_text
-                await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
-                log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
+                status = await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
+                if status is not None:
+                    _log_delivery(status, f"attach _type={attach.get('_type')}")
 
             if msg.text and not text_sent:
-                await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb)
+                _log_delivery(await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
         else:
             if msg.text:
-                await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb)
-                log.info("Forwarded text → TG")
+                _log_delivery(await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
             else:
                 log.warning("Нетекстовое сообщение! %s", msg.attaches)
 

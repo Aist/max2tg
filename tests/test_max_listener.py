@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from app.max_listener import _human_size, _guess_media_kind, _send_attach
+from app.tg_sender import SendStatus
 
 
 # ---------------------------------------------------------------------------
@@ -157,8 +158,8 @@ class TestSendAttachPoll:
 
     def _make_sender(self):
         sender = MagicMock()
-        sender.send_poll = AsyncMock()
-        sender.send = AsyncMock()
+        sender.send_poll = AsyncMock(return_value=SendStatus.OK)
+        sender.send = AsyncMock(return_value=SendStatus.OK)
         return sender
 
     @pytest.mark.asyncio
@@ -172,7 +173,7 @@ class TestSendAttachPoll:
 
         result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
 
-        assert result is True
+        assert result is SendStatus.OK
         sender.send_poll.assert_awaited_once()
         sender.send.assert_not_called()
         _, options = sender.send_poll.await_args.args[:2]
@@ -185,7 +186,7 @@ class TestSendAttachPoll:
 
         result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
 
-        assert result is True
+        assert result is SendStatus.OK
         sender.send_poll.assert_not_called()
         sender.send.assert_awaited_once()
 
@@ -196,7 +197,7 @@ class TestSendAttachPoll:
 
         result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
 
-        assert result is True
+        assert result is SendStatus.OK
         sender.send_poll.assert_not_called()
         sender.send.assert_awaited_once()
 

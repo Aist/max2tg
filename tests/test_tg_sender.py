@@ -1,18 +1,27 @@
-"""Tests for app/tg_sender.py — TelegramSender.send_poll."""
+"""Tests for app/tg_sender.py — poll formatting and delivery/outbox behaviour."""
 
-import pytest
+import asyncio
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from telegram.constants import PollLimit
+from telegram.error import BadRequest, TimedOut
 
-from app.tg_sender import TelegramSender
+from app.tg_sender import OUTBOX_MAX_ITEMS, SendStatus, TelegramSender
 
 
-def _make_sender() -> TelegramSender:
+def _make_sender(max_retries: int = 1) -> TelegramSender:
+    """Build a sender with a mocked Bot and no background flusher."""
     sender = TelegramSender.__new__(TelegramSender)
     sender._bot = MagicMock()
     sender._bot.send_poll = AsyncMock()
+    sender._bot.send_message = AsyncMock()
     sender._chat_id = "123"
+    sender._max_retries = max_retries
+    sender._outbox = deque()
+    sender._lock = asyncio.Lock()
+    sender._flusher = None
     return sender
 
 
@@ -57,3 +66,118 @@ class TestSendPoll:
 
         sent_options = sender._bot.send_poll.await_args.kwargs["options"]
         assert len(sent_options) == PollLimit.MAX_OPTION_NUMBER
+
+
+class TestSendStatus:
+    def test_ok_is_truthy_and_others_are_not(self):
+        assert SendStatus.OK
+        assert not SendStatus.QUEUED
+        assert not SendStatus.DROPPED
+
+    def test_worst_picks_least_successful(self):
+        assert SendStatus.worst() is SendStatus.OK
+        assert SendStatus.worst(SendStatus.OK, SendStatus.OK) is SendStatus.OK
+        assert SendStatus.worst(SendStatus.OK, SendStatus.QUEUED) is SendStatus.QUEUED
+        assert SendStatus.worst(SendStatus.QUEUED, SendStatus.DROPPED) is SendStatus.DROPPED
+
+
+class TestDelivery:
+    @pytest.mark.asyncio
+    async def test_successful_send_reports_ok_and_leaves_outbox_empty(self):
+        sender = _make_sender()
+
+        status = await sender.send("hello")
+
+        assert status is SendStatus.OK
+        assert sender.outbox_size == 0
+
+    @pytest.mark.asyncio
+    async def test_network_failure_is_queued_not_lost(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+
+        status = await sender.send("hello")
+
+        assert status is SendStatus.QUEUED
+        assert sender.outbox_size == 1
+
+    @pytest.mark.asyncio
+    async def test_telegram_rejection_is_dropped_without_queueing(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=BadRequest("Chat not found"))
+
+        status = await sender.send("hello")
+
+        assert status is SendStatus.DROPPED
+        assert sender.outbox_size == 0
+        # Permanent errors must not be retried.
+        assert sender._bot.send_message.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retries_before_queueing(self):
+        sender = _make_sender(max_retries=2)
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+
+        await sender.send("hello")
+
+        assert sender._bot.send_message.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_new_sends_queue_while_outbox_is_not_empty(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        await sender.send("first")
+        sender._bot.send_message = AsyncMock()  # network is back
+
+        status = await sender.send("second")
+
+        # Order matters: nothing may overtake the message still waiting in the outbox.
+        assert status is SendStatus.QUEUED
+        assert sender.outbox_size == 2
+        sender._bot.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_outbox_is_flushed_in_order_when_network_returns(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        await sender.send("first")
+        await sender.send("second")
+        sender._bot.send_message = AsyncMock()
+
+        await sender.flush_outbox()
+
+        assert sender.outbox_size == 0
+        sent = [call.kwargs["text"] for call in sender._bot.send_message.await_args_list]
+        assert sent == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_flush_stops_at_first_still_failing_message(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        await sender.send("first")
+        await sender.send("second")
+
+        await sender.flush_outbox()
+
+        assert sender.outbox_size == 2
+
+    @pytest.mark.asyncio
+    async def test_flush_drops_a_message_telegram_rejects(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        await sender.send("first")
+        sender._bot.send_message = AsyncMock(side_effect=BadRequest("bad entity"))
+
+        await sender.flush_outbox()
+
+        assert sender.outbox_size == 0
+
+    @pytest.mark.asyncio
+    async def test_outbox_is_capped(self):
+        sender = _make_sender()
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+
+        for i in range(OUTBOX_MAX_ITEMS + 5):
+            await sender.send(f"msg{i}")
+
+        assert sender.outbox_size == OUTBOX_MAX_ITEMS
