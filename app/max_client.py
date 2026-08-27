@@ -53,6 +53,10 @@ _HTTP_HEADERS = {
     "Sec-Fetch-Site": "cross-site",
 }
 
+# OK's video CDN rejects requests carrying the Origin header Max's own CDN expects,
+# so video downloads use this variant instead of _HTTP_HEADERS.
+_HTTP_HEADERS_NO_ORIGIN = {k: v for k, v in _HTTP_HEADERS.items() if k != "Origin"}
+
 
 class OpCode(IntEnum):
     HEARTBEAT_PING = 1
@@ -68,6 +72,7 @@ class OpCode(IntEnum):
     GET_MESSAGES = 49
     SEND_MESSAGE = 64
     EDIT_MESSAGE = 67
+    GET_VIDEO_URL = 83
     GET_FILE_URL = 88
     DISPATCH = 128
 
@@ -194,6 +199,7 @@ class MaxClient:
                                 "userAgent": {
                                     "deviceType": "WEB",
                                     "deviceName": "Chrome 131.0.0.0",
+                                    "headerUserAgent": _USER_AGENT,
                                     "appVersion": "26.4.7",
                                 },
                             },
@@ -334,16 +340,21 @@ class MaxClient:
         log.info("send_message(chat=%s) → %s", chat_id, "OK" if resp else "FAIL")
         return resp
 
-    async def download_file(self, url: str) -> bytes | None:
-        """Download a file by URL, returning raw bytes or None on failure."""
+    async def download_file(self, url: str, omit_origin: bool = False) -> bytes | None:
+        """Download a file by URL, returning raw bytes or None on failure.
+
+        omit_origin: drop the Origin header for CDNs (e.g. OK's video CDN)
+        that reject requests carrying the one Max's own CDN expects.
+        """
         session = getattr(self, "_session", None)
         close_after = False
         if session is None or session.closed:
             session = aiohttp.ClientSession(headers=_BROWSER_HEADERS)
             close_after = True
+        headers = _HTTP_HEADERS_NO_ORIGIN if omit_origin else _HTTP_HEADERS
         try:
             async with session.get(
-                url, headers=_HTTP_HEADERS,
+                url, headers=headers,
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status == 200:
