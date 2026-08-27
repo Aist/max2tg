@@ -1,7 +1,7 @@
-"""Tests for app/tg_sender.py — TelegramSender.send_poll."""
+"""Tests for app/tg_sender.py — TelegramSender.send_poll, __init__."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram.constants import PollLimit
 
@@ -57,3 +57,21 @@ class TestSendPoll:
 
         sent_options = sender._bot.send_poll.await_args.kwargs["options"]
         assert len(sent_options) == PollLimit.MAX_OPTION_NUMBER
+
+
+class TestTelegramSenderInit:
+    def test_default_base_url_not_overridden(self):
+        with patch("app.tg_sender.Bot") as bot_cls:
+            TelegramSender(token="t", chat_id="1")
+
+        kwargs = bot_cls.call_args.kwargs
+        assert "base_url" not in kwargs
+        assert "base_file_url" not in kwargs
+
+    def test_custom_base_url_passed_to_bot(self):
+        with patch("app.tg_sender.Bot") as bot_cls:
+            TelegramSender(token="t", chat_id="1", base_url="http://localhost:8081")
+
+        kwargs = bot_cls.call_args.kwargs
+        assert kwargs["base_url"] == "http://localhost:8081/bot"
+        assert kwargs["base_file_url"] == "http://localhost:8081/file/bot"

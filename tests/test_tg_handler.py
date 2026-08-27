@@ -9,6 +9,7 @@ from app.tg_handler import (
     _on_cancel,
     _on_reply_button,
     _on_text_reply,
+    build_tg_app,
 )
 
 
@@ -319,3 +320,26 @@ class TestOnTextReply:
         args = update.message.reply_text.call_args[0][0]
         assert '<b>evil</b>' not in args
         assert '&lt;b&gt;evil&lt;/b&gt;' in args
+
+
+# ---------------------------------------------------------------------------
+# build_tg_app — base_url wiring
+# ---------------------------------------------------------------------------
+
+class TestBuildTgAppBaseUrl:
+    def test_base_url_configured_when_set(self):
+        with patch("app.tg_handler.Application") as application_cls:
+            token_builder = application_cls.builder.return_value.token.return_value
+            build_tg_app("tok", MagicMock(), "123", base_url="http://localhost:8081")
+
+        token_builder.base_url.assert_called_once_with("http://localhost:8081/bot")
+        token_builder.base_url.return_value.base_file_url.assert_called_once_with(
+            "http://localhost:8081/file/bot"
+        )
+
+    def test_base_url_not_touched_when_unset(self):
+        with patch("app.tg_handler.Application") as application_cls:
+            token_builder = application_cls.builder.return_value.token.return_value
+            build_tg_app("tok", MagicMock(), "123")
+
+        token_builder.base_url.assert_not_called()

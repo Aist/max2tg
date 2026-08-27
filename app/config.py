@@ -39,6 +39,10 @@ def load_settings() -> Settings:
             f"TG_CHAT_ID must be a valid integer, got: {tg_chat_id!r}"
         )
 
+    # Strip a trailing slash so downstream "+ /bot" / "+ /file/bot" concatenation
+    # doesn't end up with a double slash if the user includes one in TG_BASE_URL.
+    tg_base_url = (os.environ.get("TG_BASE_URL") or "").rstrip("/") or None
+
     return Settings(
         max_token=os.environ["MAX_TOKEN"],
         max_device_id=os.environ["MAX_DEVICE_ID"],
@@ -49,7 +53,7 @@ def load_settings() -> Settings:
         tg_read_timeout=int(os.environ.get("TG_READ_TIMEOUT", 0)) or None,
         tg_write_timeout=int(os.environ.get("TG_WRITE_TIMEOUT", 0)) or None,
         tg_media_write_timeout=int(os.environ.get("TG_MEDIA_WRITE_TIMEOUT", 0)) or None,
-        tg_base_url=os.environ.get("TG_BASE_URL") or None,
+        tg_base_url=tg_base_url,
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
     )

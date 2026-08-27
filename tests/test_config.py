@@ -129,6 +129,26 @@ class TestLoadSettingsValid:
         s = _load_settings_with_env(_env(MAX_CHAT_IDS=""))
         assert s.max_chat_ids is None
 
+    def test_tg_base_url_none_when_not_set(self):
+        s = _load_settings_with_env(_env())
+        assert s.tg_base_url is None
+
+    def test_tg_base_url_populated_when_set(self):
+        s = _load_settings_with_env(_env(TG_BASE_URL="http://localhost:8081"))
+        assert s.tg_base_url == "http://localhost:8081"
+
+    def test_tg_base_url_none_when_empty_string(self):
+        s = _load_settings_with_env(_env(TG_BASE_URL=""))
+        assert s.tg_base_url is None
+
+    def test_tg_base_url_trailing_slash_stripped(self):
+        s = _load_settings_with_env(_env(TG_BASE_URL="http://localhost:8081/"))
+        assert s.tg_base_url == "http://localhost:8081"
+
+    def test_tg_base_url_multiple_trailing_slashes_stripped(self):
+        s = _load_settings_with_env(_env(TG_BASE_URL="http://localhost:8081//"))
+        assert s.tg_base_url == "http://localhost:8081"
+
 
 # ---------------------------------------------------------------------------
 # load_settings — missing required variables
