@@ -225,6 +225,9 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно написать текст, который отправится обратно в соответствующий чат Max
 4. Если Telegram недоступен, сообщение не теряется: после `TG_MAX_RETRIES` неудачных попыток оно попадает в очередь повторов (outbox), которая раз в 30 секунд пробует доставить его снова — до суток. Пока очередь не пуста, новые сообщения тоже идут в неё, чтобы не нарушать порядок. Ошибки, которые Telegram будет отклонять всегда (например, неверный chat_id), в очередь не попадают и логируются как `LOST`
 
+5. При обрыве связи с Max бот запоминает момент последнего полученного события и после переподключения перечитывает весь пропуск целиком (а не последние 5 секунд). Повторы отсекаются по id сообщения, поэтому пересечение окон не даёт дублей
+6. Если `MAX_TOKEN` протух, в Telegram придёт «ошибка авторизации — обновите MAX_TOKEN» (не чаще раза в час)
+
 Доставку видно в логах: `Forwarded ... → TG` — доставлено; `queued for retry` — ждёт в очереди; `LOST` — потеряно
 
 ## Структура проекта
@@ -492,6 +495,9 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 2. Incoming messages are forwarded to the specified Telegram chat
 3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it, type your response, and it gets sent back to the corresponding Max chat
 4. If Telegram is unreachable the message is not lost: after `TG_MAX_RETRIES` failed attempts it goes to a retry queue (outbox) that keeps retrying every 30 seconds for up to 24 hours. While the queue is not empty new messages join it too, so the chat order is preserved. Errors Telegram would always reject (a wrong chat_id, for instance) are never queued and are logged as `LOST`
+
+5. When the Max connection drops, the bot remembers the time of the last event it saw and re-reads the whole gap after reconnecting (not just the last 5 seconds). Replays are filtered by message id, so overlapping windows produce no duplicates
+6. If `MAX_TOKEN` expires, Telegram gets an "authorization failed — refresh MAX_TOKEN" alert (at most once an hour)
 
 Delivery is visible in the log: `Forwarded ... TG` means delivered, `queued for retry` means waiting in the outbox, `LOST` means gone
 

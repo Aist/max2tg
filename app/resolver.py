@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.max_client import MaxClient
 
 log = logging.getLogger(__name__)
+
+# A lookup that failed once is retried after this, so a single WS hiccup does not
+# leave a contact showing as a bare numeric id for the rest of the process life.
+FETCH_RETRY_SEC = 600
 
 
 class ContactResolver:
@@ -17,7 +22,7 @@ class ContactResolver:
         self.chat_types: dict[Any, str] = {}
         self.users: dict[Any, str] = {}
         self._client = client
-        self._fetch_failed: set = set()
+        self._fetch_failed: dict[Any, float] = {}
         self._my_id: Any = None
 
     def chat_name(self, chat_id: Any) -> str:
@@ -32,19 +37,24 @@ class ContactResolver:
     async def resolve_user(self, user_id: Any) -> str:
         if user_id in self.users:
             return self.users[user_id]
-        if user_id in self._fetch_failed:
+        if self._recently_failed(user_id):
             return str(user_id)
 
         await self._ws_fetch_contacts([user_id])
 
         if user_id in self.users:
             return self.users[user_id]
-        self._fetch_failed.add(user_id)
+        self._fetch_failed[user_id] = time.monotonic()
         return str(user_id)
+
+    def _recently_failed(self, user_id: Any) -> bool:
+        failed_at = self._fetch_failed.get(user_id)
+        return failed_at is not None and time.monotonic() - failed_at < FETCH_RETRY_SEC
 
     async def resolve_users_batch(self, user_ids: list) -> None:
         """Pre-fetch a batch of unknown user IDs in one WS call."""
-        unknown = [uid for uid in user_ids if uid not in self.users and uid not in self._fetch_failed]
+        unknown = [uid for uid in user_ids
+                   if uid not in self.users and not self._recently_failed(uid)]
         if unknown:
             await self._ws_fetch_contacts(unknown)
 

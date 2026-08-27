@@ -10,6 +10,8 @@ from app.tg_sender import SendStatus, TelegramSender, reply_keyboard
 
 log = logging.getLogger(__name__)
 
+AUTH_ALERT_INTERVAL_SEC = 3600
+
 PHOTO_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
@@ -262,6 +264,7 @@ def create_max_client(
     _first_connect = True
     _notif_count = 0
     _last_notif_time: datetime | None = None
+    _last_auth_alert: datetime | None = None
 
     def _can_notify() -> bool:
         if _last_notif_time is None:
@@ -288,18 +291,27 @@ def create_max_client(
 
         if not _first_connect:
             await sender.send("✅ <b>Max:</b> соединение восстановлено")
-            # After reconnect need to process messages sent in reconnect period, to avoid  messages loss while reconnecting
+            # Re-read everything sent while we were away. The window covers the whole gap,
+            # not just the reconnect delay; duplicates are filtered by id in MaxClient.
+            now = time.time()
+            gap_start = client.gap_since or (now - client.RECONNECT_SEC)
+            gap_start = max(gap_start - client.CATCHUP_OVERLAP_SEC, now - client.CATCHUP_MAX_SEC)
+            log.info("Catching up on %.0fs since the disconnect...", now - gap_start)
             chat_ids = client.chat_ids or [*resolver.chats, *resolver.users]
+            recovered = 0
             for chat_id in chat_ids:
                 resp = await client.cmd(OpCode.GET_MESSAGES, {
                     "chatId": chat_id,
-                    "from": (int(time.time()) - client.RECONNECT_SEC) * 1000,
-                    "forward": 20,
+                    "from": int(gap_start * 1000),
+                    "forward": client.CATCHUP_LIMIT,
                     "backward": 0,
                     "getMessages": True
                 })
-                for message in resp.get("messages", []):
+                messages = resp.get("messages", [])
+                recovered += len(messages)
+                for message in messages:
                     client.process_message({"message": message, "chatId": chat_id})
+            log.info("Catch-up: re-read %d message(s) from %d chat(s)", recovered, len(chat_ids))
         else:
             chat_count = len(resolver.chats)
             await sender.send(f"✅ <b>Max:</b> подключён | чатов: {chat_count}")
@@ -314,6 +326,20 @@ def create_max_client(
         _notif_count += 1
         _last_notif_time = datetime.now()
         await sender.send("⚠️ <b>Max:</b> соединение потеряно, переподключение...")
+
+    @client.on_auth_error
+    async def handle_auth_error(payload: dict):
+        nonlocal _last_auth_alert
+        log.error("Max authorization failed: %s", payload)
+        now = datetime.now()
+        if _last_auth_alert and (now - _last_auth_alert).total_seconds() < AUTH_ALERT_INTERVAL_SEC:
+            return
+        _last_auth_alert = now
+        reason = payload.get("error") or payload.get("message") if isinstance(payload, dict) else None
+        await sender.send(
+            "⛔️ <b>Max:</b> ошибка авторизации — обновите <code>MAX_TOKEN</code>"
+            + (f"\n<i>{escape(str(reason))}</i>" if reason else "")
+        )
 
     @client.on_message
     async def handle_message(msg: MaxMessage):

@@ -1,5 +1,7 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
+import asyncio
+
 import pytest
 from app.max_client import MaxClient, MaxMessage, OpCode
 
@@ -296,3 +298,118 @@ class TestMaskSensitive:
         masked = MaxClient._mask_sensitive(text)
         assert 'my-secret-token' not in masked
         assert 'MAX_TOKEN=***' in masked
+
+
+class TestDeduplication:
+    """A catch-up after reconnect overlaps live events, so ids must not be forwarded twice."""
+
+    def _client_with_recorder(self):
+        seen = []
+
+        c = MaxClient(token="tok", device_id="dev")
+
+        @c.on_message
+        async def record(msg):
+            seen.append(msg.message_id)
+
+        return c, seen
+
+    @pytest.mark.asyncio
+    async def test_same_message_is_forwarded_once(self):
+        c, seen = self._client_with_recorder()
+        payload = {"chatId": -1, "message": {"id": "abc", "sender": 5, "text": "hi"}}
+
+        c.process_message(payload)
+        c.process_message(payload)
+        await asyncio.sleep(0)
+
+        assert seen == ["abc"]
+
+    @pytest.mark.asyncio
+    async def test_different_messages_all_pass(self):
+        c, seen = self._client_with_recorder()
+
+        for mid in ("a", "b", "c"):
+            c.process_message({"chatId": -1, "message": {"id": mid, "sender": 5, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert seen == ["a", "b", "c"]
+
+    @pytest.mark.asyncio
+    async def test_messages_without_id_are_not_deduplicated(self):
+        c, seen = self._client_with_recorder()
+
+        for _ in range(2):
+            c.process_message({"chatId": -1, "message": {"sender": 5, "text": "hi"}})
+        await asyncio.sleep(0)
+
+        assert len(seen) == 2
+
+    def test_seen_ids_cache_is_bounded(self):
+        c = MaxClient(token="tok", device_id="dev")
+
+        for i in range(c.SEEN_IDS_MAX + 50):
+            c._already_seen(f"id{i}")
+
+        assert len(c._seen_ids) == c.SEEN_IDS_MAX
+        assert "id0" not in c._seen_ids
+        assert f"id{c.SEEN_IDS_MAX + 49}" in c._seen_ids
+
+
+class TestAuthError:
+    """An expired MAX_TOKEN used to fail completely silently."""
+
+    @pytest.mark.asyncio
+    async def test_auth_error_triggers_callback(self):
+        c = MaxClient(token="tok", device_id="dev")
+        got = []
+
+        @c.on_auth_error
+        async def on_error(payload):
+            got.append(payload)
+
+        await c._handle({"opcode": int(OpCode.AUTH_SNAPSHOT), "cmd": 3, "seq": 1,
+                         "payload": {"error": "login.token.invalid"}})
+        await asyncio.sleep(0)
+
+        assert got == [{"error": "login.token.invalid"}]
+
+    @pytest.mark.asyncio
+    async def test_error_response_resolves_a_pending_request(self):
+        c = MaxClient(token="tok", device_id="dev")
+        fut = asyncio.get_running_loop().create_future()
+        c._pending[7] = fut
+
+        await c._handle({"opcode": int(OpCode.GET_MESSAGES), "cmd": 3, "seq": 7, "payload": {"error": "x"}})
+
+        assert fut.result() == {}
+
+    @pytest.mark.asyncio
+    async def test_ordinary_error_does_not_trigger_auth_callback(self):
+        c = MaxClient(token="tok", device_id="dev")
+        got = []
+
+        @c.on_auth_error
+        async def on_error(payload):
+            got.append(payload)
+
+        await c._handle({"opcode": int(OpCode.GET_MESSAGES), "cmd": 3, "seq": 1, "payload": {}})
+        await asyncio.sleep(0)
+
+        assert got == []
+
+
+class TestReconnectBackoff:
+    def test_starts_at_base_delay(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c._reconnect_delay == MaxClient.RECONNECT_SEC
+
+    @pytest.mark.asyncio
+    async def test_successful_auth_resets_the_delay(self):
+        c = MaxClient(token="tok", device_id="dev")
+        c._reconnect_delay = MaxClient.RECONNECT_MAX_SEC
+
+        await c._handle({"opcode": int(OpCode.AUTH_SNAPSHOT), "cmd": 1, "seq": 1,
+                         "payload": {"profile": {"contact": {"id": 1}}}})
+
+        assert c._reconnect_delay == MaxClient.RECONNECT_SEC

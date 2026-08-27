@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
@@ -70,6 +71,12 @@ class OpCode(IntEnum):
     EDIT_MESSAGE = 67
     GET_FILE_URL = 88
     DISPATCH = 128
+    MARK_READ = 130
+    PRESENCE = 132
+
+
+# High-volume events that say nothing about our own work — keep them out of INFO logs.
+_NOISY_OPS = {OpCode.MARK_READ, OpCode.PRESENCE}
 
 
 @dataclass
@@ -90,6 +97,13 @@ class MaxClient:
     WS_URL = "wss://ws-api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
+    RECONNECT_MAX_SEC = 60
+    # Catch-up after a reconnect re-reads a little before the gap, and never further back
+    # than CATCHUP_MAX_SEC — a long outage should not replay a whole day of history.
+    CATCHUP_OVERLAP_SEC = 5
+    CATCHUP_MAX_SEC = 6 * 3600
+    CATCHUP_LIMIT = 100
+    SEEN_IDS_MAX = 2000
 
     def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False):
         self.token = token
@@ -105,6 +119,12 @@ class MaxClient:
         self._dispatch_counter = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._on_disconnect_cb = None
+        self._on_auth_error_cb = None
+        self._last_frame_at: float = 0.0
+        self._reconnect_delay: float = self.RECONNECT_SEC
+        self._seen_ids: OrderedDict[str, None] = OrderedDict()
+        # Wall-clock time of the last frame seen before the connection dropped.
+        self.gap_since: float | None = None
         self.chat_ids: list[int] = []
         if chat_ids:
             self.chat_ids.extend(map(int, map(str.strip, chat_ids.split(','))))
@@ -121,6 +141,10 @@ class MaxClient:
 
     def on_disconnect(self, func):
         self._on_disconnect_cb = func
+        return func
+
+    def on_auth_error(self, func):
+        self._on_auth_error_cb = func
         return func
 
     # ── transport ──────────────────────────────────────────────────
@@ -180,7 +204,7 @@ class MaxClient:
                 try:
                     log.info("Connecting to %s ...", self.WS_URL)
                     async with session.ws_connect(
-                        self.WS_URL, headers=_WS_HEADERS
+                        self.WS_URL, headers=_WS_HEADERS, heartbeat=self.HEARTBEAT_SEC
                     ) as ws:
                         self._ws = ws
                         self._seq = 0
@@ -205,6 +229,7 @@ class MaxClient:
 
                         async for msg in ws:
                             if msg.type == aiohttp.WSMsgType.TEXT:
+                                self._last_frame_at = time.time()
                                 await self._handle(json.loads(msg.data))
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
@@ -213,10 +238,17 @@ class MaxClient:
                                 log.warning("WebSocket closed/error: %s", msg.type)
                                 break
 
+                        log.warning(
+                            "WebSocket disconnected (close_code=%s, error=%s)",
+                            ws.close_code, ws.exception(),
+                        )
+
                 except Exception:
                     log.exception("Connection error")
 
                 finally:
+                    # Remember how far we got, so the catch-up after reconnect covers the gap.
+                    self.gap_since = self._last_frame_at or time.time()
                     if self._heartbeat_task:
                         self._heartbeat_task.cancel()
                     for fut in self._pending.values():
@@ -230,8 +262,10 @@ class MaxClient:
                     except Exception:
                         log.exception("on_disconnect callback error")
 
-                log.info("Reconnecting in %ds...", self.RECONNECT_SEC)
-                await asyncio.sleep(self.RECONNECT_SEC)
+                delay = self._reconnect_delay * random.uniform(0.8, 1.2)
+                log.info("Reconnecting in %.0fs...", delay)
+                await asyncio.sleep(delay)
+                self._reconnect_delay = min(self._reconnect_delay * 2, self.RECONNECT_MAX_SEC)
 
     # ── event dispatcher ───────────────────────────────────────────
 
@@ -249,19 +283,19 @@ class MaxClient:
             if op not in (OpCode.HANDSHAKE, OpCode.AUTH_SNAPSHOT, OpCode.GET_MESSAGES):
                 log.debug("<<< RESP  op=%-4s seq=%s", op, seq)
 
-        # cmd=3 is an error response
-        elif cmd == 3 and seq in self._pending:
-            fut = self._pending.pop(seq)
-            if not fut.done():
+        # cmd=3 is an error response. Handshake and auth are sent fire-and-forget, so their
+        # errors carry no pending future and used to fall through here completely unlogged.
+        elif cmd == 3:
+            fut = self._pending.pop(seq, None)
+            if fut is not None and not fut.done():
                 fut.set_result({})
-            log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, self._mask_sensitive(str(payload)))
+            log.error("<<< ERROR op=%-4s seq=%s | %s", op, seq, self._mask_sensitive(str(payload)))
+            if op in (OpCode.AUTH_SNAPSHOT, OpCode.HANDSHAKE) and self._on_auth_error_cb:
+                task = asyncio.create_task(self._on_auth_error_cb(payload))
+                task.add_done_callback(_log_task_exception)
 
         # server-initiated events — not a reply to one of our requests
         else:
-            payload_preview = json.dumps(payload, ensure_ascii=False)
-            if len(payload_preview) > 3000:
-                payload_preview = payload_preview[:3000] + "…"
-
             if op == OpCode.HANDSHAKE and cmd == 1:
                 log.info("Handshake OK → sending auth token...")
                 await self._send(
@@ -276,6 +310,7 @@ class MaxClient:
             elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
                 self._my_id = payload.get("profile", {}).get("contact", {}).get("id")
                 log.info("Authorized! my_id=%s", self._my_id)
+                self._reconnect_delay = self.RECONNECT_SEC
                 if self.debug:
                     self._dump_json("snapshot.json", payload)
 
@@ -295,16 +330,34 @@ class MaxClient:
                 log.debug("Heartbeat op=%s", op)
 
             elif cmd not in (1, 3):
-                log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview[:500]))
+                payload_preview = json.dumps(payload, ensure_ascii=False)[:500]
+                emit = log.debug if op in _NOISY_OPS else log.info
+                emit("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview))
+
+    def _already_seen(self, message_id: str) -> bool:
+        """True if this id was processed before — catch-up after a reconnect overlaps live events."""
+        if not message_id:
+            return False
+        if message_id in self._seen_ids:
+            return True
+        self._seen_ids[message_id] = None
+        while len(self._seen_ids) > self.SEEN_IDS_MAX:
+            self._seen_ids.popitem(last=False)
+        return False
 
     def process_message(self, payload):
-        if self._on_message_cb:
-            msg = self._parse_message(payload)
-            if (msg is not None
-                and ((not self.chat_ids) or (msg.chat_id in self.chat_ids))
-                and msg.update_time is None):
-                task = asyncio.create_task(self._on_message_cb(msg))
-                task.add_done_callback(_log_task_exception)
+        if not self._on_message_cb:
+            return
+        msg = self._parse_message(payload)
+        if msg is None or msg.update_time is not None:
+            return
+        if self.chat_ids and msg.chat_id not in self.chat_ids:
+            return
+        if self._already_seen(msg.message_id):
+            log.debug("Skipping duplicate message id=%s", msg.message_id)
+            return
+        task = asyncio.create_task(self._on_message_cb(msg))
+        task.add_done_callback(_log_task_exception)
 
     # ── WebSocket RPC: fetch contacts ──────────────────────────────
 

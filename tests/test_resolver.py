@@ -1,7 +1,9 @@
 """Tests for app/resolver.py — ContactResolver."""
 
+import time
+
 import pytest
-from app.resolver import ContactResolver
+from app.resolver import FETCH_RETRY_SEC, ContactResolver
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +314,7 @@ class TestResolveUser:
     @pytest.mark.asyncio
     async def test_returns_str_id_when_fetch_failed_before(self):
         resolver = ContactResolver()
-        resolver._fetch_failed.add(42)
+        resolver._fetch_failed[42] = time.monotonic()
         result = await resolver.resolve_user(42)
         assert result == "42"
 
@@ -340,3 +342,17 @@ class TestResolveUser:
         result = await resolver.resolve_user(77)
         assert result == "Fetched User"
         assert 77 not in resolver._fetch_failed
+
+    @pytest.mark.asyncio
+    async def test_retries_lookup_after_failure_expires(self):
+        from unittest.mock import AsyncMock, patch
+
+        resolver = ContactResolver()
+        resolver._fetch_failed[42] = time.monotonic() - FETCH_RETRY_SEC - 1
+
+        async def fake_fetch(ids):
+            resolver.users[ids[0]] = "Now Resolvable"
+
+        with patch.object(resolver, "_ws_fetch_contacts", new=AsyncMock(side_effect=fake_fetch)):
+            result = await resolver.resolve_user(42)
+        assert result == "Now Resolvable"

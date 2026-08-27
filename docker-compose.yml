@@ -14,6 +14,7 @@ services:
       TG_READ_TIMEOUT:
       TG_WRITE_TIMEOUT:
       TG_MEDIA_WRITE_TIMEOUT:
+      TG_MAX_RETRIES:
       DEBUG:
       REPLY_ENABLED:
       LOG_DIR: /app/logs
