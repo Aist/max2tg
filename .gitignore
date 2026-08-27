@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 debug/
+logs/
 .claude/
 *.code*
 *.cl*

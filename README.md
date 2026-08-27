@@ -185,6 +185,25 @@ copy .env.example .env
 python -m app.main
 ```
 
+### Автозапуск через Планировщик задач (Windows)
+
+```powershell
+$user = "$env:USERDOMAIN\$env:USERNAME"
+$action = New-ScheduledTaskAction -Execute "C:\path\to\max2tg\.venv\Scripts\pythonw.exe" -Argument "-m app.main" -WorkingDirectory "C:\path\to\max2tg"
+$logon = New-ScheduledTaskTrigger -AtLogOn -User $user
+# Сторож: если процесс умер, следующее срабатывание поднимет его заново
+$watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$watchdog.Repetition.Duration = ""
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+    -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName "max2tg" -Action $action -Trigger @($logon,$watchdog) -Settings $settings -Principal $principal
+```
+
+`pythonw.exe` запускает бота без окна консоли. `IgnoreNew` не даёт запустить второй экземпляр, пока работает первый, поэтому сторож безопасен. Задача стартует при входе пользователя в систему — если компьютер перезагрузился и никто не залогинился, бот не поднимется.
+
+Управление: `Start-ScheduledTask max2tg`, `Stop-ScheduledTask max2tg`, `Get-ScheduledTaskInfo max2tg`.
+
 ### Запуск как systemd-сервис (Linux)
 
 Создайте файл `/etc/systemd/system/max2tg.service`:
@@ -455,6 +474,25 @@ copy .env.example .env
 
 python -m app.main
 ```
+
+### Autostart via Task Scheduler (Windows)
+
+```powershell
+$user = "$env:USERDOMAIN\$env:USERNAME"
+$action = New-ScheduledTaskAction -Execute "C:\path\to\max2tg\.venv\Scripts\pythonw.exe" -Argument "-m app.main" -WorkingDirectory "C:\path\to\max2tg"
+$logon = New-ScheduledTaskTrigger -AtLogOn -User $user
+# Watchdog: if the process died, the next tick starts it again
+$watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$watchdog.Repetition.Duration = ""
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+    -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName "max2tg" -Action $action -Trigger @($logon,$watchdog) -Settings $settings -Principal $principal
+```
+
+`pythonw.exe` runs the bot without a console window. `IgnoreNew` refuses to start a second copy while the first one runs, which makes the watchdog safe. The task starts at user logon — after a reboot with nobody logging in, the bot stays down.
+
+Control it with `Start-ScheduledTask max2tg`, `Stop-ScheduledTask max2tg`, `Get-ScheduledTaskInfo max2tg`.
 
 ### Running as a systemd service (Linux)
 
