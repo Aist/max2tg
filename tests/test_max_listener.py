@@ -1,7 +1,9 @@
 """Tests for app/max_listener.py — pure helper functions."""
 
 import pytest
-from app.max_listener import _human_size, _guess_media_kind
+from unittest.mock import AsyncMock, MagicMock
+
+from app.max_listener import _human_size, _guess_media_kind, _send_attach
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +146,70 @@ class TestGuessMediaKind:
     # Extension appearing in the middle of filename should not trigger false match
     def test_mp4_in_name_not_extension_is_document(self):
         assert _guess_media_kind("mp4_notes.txt") == "document"
+
+
+# ---------------------------------------------------------------------------
+# _send_attach — POLL handling
+# ---------------------------------------------------------------------------
+
+class TestSendAttachPoll:
+    """Tests for the POLL branch of _send_attach."""
+
+    def _make_sender(self):
+        sender = MagicMock()
+        sender.send_poll = AsyncMock()
+        sender.send = AsyncMock()
+        return sender
+
+    @pytest.mark.asyncio
+    async def test_poll_with_enough_options_is_forwarded_as_poll(self):
+        sender = self._make_sender()
+        attach = {
+            "_type": "POLL",
+            "title": "Любимый цвет?",
+            "answers": [{"text": "Красный"}, {"text": "Синий"}],
+        }
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_awaited_once()
+        sender.send.assert_not_called()
+        _, options = sender.send_poll.await_args.args[:2]
+        assert options == ["Красный", "Синий"]
+
+    @pytest.mark.asyncio
+    async def test_poll_with_less_than_two_options_falls_back_to_text(self):
+        sender = self._make_sender()
+        attach = {"_type": "POLL", "title": "Опрос", "answers": [{"text": "Единственный"}]}
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_not_called()
+        sender.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_with_no_answers_key_falls_back_to_text(self):
+        sender = self._make_sender()
+        attach = {"_type": "POLL", "title": "Опрос"}
+
+        result = await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        assert result is True
+        sender.send_poll.assert_not_called()
+        sender.send.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_poll_ignores_answers_without_text(self):
+        sender = self._make_sender()
+        attach = {
+            "_type": "POLL",
+            "title": "Опрос",
+            "answers": [{"text": "Да"}, {}, {"text": "Нет"}, {"text": ""}],
+        }
+
+        await _send_attach(attach, client=MagicMock(), sender=sender, header_text="hdr", chat_id=1, message_id=1)
+
+        _, options = sender.send_poll.await_args.args[:2]
+        assert options == ["Да", "Нет"]

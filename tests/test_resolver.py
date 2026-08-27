@@ -87,7 +87,7 @@ class TestLoadSnapshot:
     def test_returns_participant_ids_as_list_of_ints(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1, "names": [{"firstName": "Me", "lastName": ""}]},
+            "profile": {"contact": {"id": 1, "names": [{"firstName": "Me", "lastName": ""}]}},
             "chats": [
                 {"id": 100, "type": "DIALOG", "participants": {"1": {}, "2": {}, "3": {}}}
             ],
@@ -97,14 +97,14 @@ class TestLoadSnapshot:
 
     def test_my_id_stored(self):
         resolver = self._make_resolver()
-        snapshot = {"profile": {"id": 42}, "chats": []}
+        snapshot = {"profile": {"contact": {"id": 42}}, "chats": []}
         resolver.load_snapshot(snapshot)
         assert resolver._my_id == 42
 
     def test_own_name_populated(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 7, "names": [{"firstName": "Bot", "lastName": "User"}]},
+            "profile": {"contact": {"id": 7, "names": [{"firstName": "Bot", "lastName": "User"}]}},
             "chats": [],
         }
         resolver.load_snapshot(snapshot)
@@ -113,7 +113,7 @@ class TestLoadSnapshot:
     def test_chat_title_stored(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"id": 50, "type": "GROUP", "title": "Dev Team", "participants": {}}],
         }
         resolver.load_snapshot(snapshot)
@@ -122,7 +122,7 @@ class TestLoadSnapshot:
     def test_chat_type_stored(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"id": 50, "type": "GROUP", "title": "Team", "participants": {}}],
         }
         resolver.load_snapshot(snapshot)
@@ -131,7 +131,7 @@ class TestLoadSnapshot:
     def test_dm_without_title_gets_peer_placeholder(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"id": 99, "type": "DIALOG", "participants": {"1": {}, "55": {}}}],
         }
         resolver.load_snapshot(snapshot)
@@ -140,7 +140,7 @@ class TestLoadSnapshot:
     def test_dm_with_explicit_title_keeps_title(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"id": 99, "type": "DIALOG", "title": "Friend", "participants": {"1": {}, "55": {}}}],
         }
         resolver.load_snapshot(snapshot)
@@ -149,7 +149,7 @@ class TestLoadSnapshot:
     def test_chat_without_id_skipped(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"type": "GROUP", "title": "Ghost", "participants": {}}],
         }
         resolver.load_snapshot(snapshot)
@@ -158,7 +158,7 @@ class TestLoadSnapshot:
     def test_invalid_participant_id_skipped(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [{"id": 10, "type": "GROUP", "participants": {"abc": {}, "2": {}}}],
         }
         result = resolver.load_snapshot(snapshot)
@@ -174,7 +174,7 @@ class TestLoadSnapshot:
     def test_multiple_chats_aggregate_participants(self):
         resolver = self._make_resolver()
         snapshot = {
-            "profile": {"id": 1},
+            "profile": {"contact": {"id": 1}},
             "chats": [
                 {"id": 10, "type": "GROUP", "participants": {"2": {}, "3": {}}},
                 {"id": 20, "type": "GROUP", "participants": {"3": {}, "4": {}}},

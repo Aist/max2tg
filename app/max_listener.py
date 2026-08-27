@@ -160,8 +160,15 @@ async def _send_attach(
 
     if atype == "POLL":
         title = attach.get("title", "Опрос")
-        options = [answer.get("text") for answer in attach.get("answers", [])]
-        await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
+        options = [
+            answer.get("text") for answer in attach.get("answers", [])
+            if isinstance(answer, dict) and answer.get("text")
+        ]
+        if len(options) >= 2:
+            await sender.send_poll(f"{header_text}\n{escape(title)}", options, reply_markup=kb)
+            return True
+        log.warning("POLL attach has too few valid options: %s", attach)
+        await sender.send(f"{header_text}\n📊 <b>{escape(title)}</b>\n<i>[опрос — не удалось переслать]</i>", reply_markup=kb)
         return True
 
     log.info("Unknown attach type %s, sending as info", atype)
