@@ -80,6 +80,7 @@ cp .env.example .env
 | `TG_READ_TIMEOUT` | нет        | Таймаут чтения HTTP-ответа от Telegram, в секундах |
 | `TG_WRITE_TIMEOUT` | нет       | Таймаут отправки обычного запроса к Telegram, в секундах |
 | `TG_MEDIA_WRITE_TIMEOUT` | нет | Таймаут загрузки медиафайлов в Telegram, в секундах. Увеличьте, если файлы отправляются повторно из-за медленного прокси |
+| `TG_BASE_URL`   | нет          | Адрес своего сервера Telegram Bot API вместо `api.telegram.org` (например `http://localhost:8081`), полезно вместе с telegram-bot-api  |
 
 ## Запуск
 
@@ -344,6 +345,7 @@ cp .env.example .env
 | `TG_READ_TIMEOUT` | no | HTTP read timeout for Telegram responses, in seconds |
 | `TG_WRITE_TIMEOUT` | no | HTTP write timeout for regular Telegram requests, in seconds |
 | `TG_MEDIA_WRITE_TIMEOUT` | no | Upload timeout for media files to Telegram, in seconds. Increase if files are sent multiple times due to a slow proxy |
+| `TG_BASE_URL` | no | Your own Telegram Bot API server address instead of `api.telegram.org` (e.g. `http://localhost:8081`), useful together with telegram-bot-api  |
 
 ## Running
 

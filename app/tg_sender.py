@@ -30,10 +30,14 @@ class TelegramSender:
             proxy_url: str | None = None,
             read_timeout: int | None = None,
             write_timeout: int | None = None,
-            media_write_timeout: int | None = None
+            media_write_timeout: int | None = None,
+            base_url: str | None = None,
     ):
         request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
-        self._bot = Bot(token=token, request=request)
+        if base_url:
+            self._bot = Bot(token=token, request=request, base_url=base_url+"/bot", base_file_url=base_url+"/file/bot")
+        else:
+            self._bot = Bot(token=token, request=request)
         self._chat_id = chat_id
 
     @property
