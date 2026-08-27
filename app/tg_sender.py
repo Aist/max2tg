@@ -115,9 +115,9 @@ class TelegramSender:
             )
         )
 
-    async def send_video(self, data: bytes, caption: str = "", filename: str = "video.mp4", reply_markup=None) -> None:
+    async def send_video(self, data: bytes, caption: str = "", filename: str = "video.mp4", reply_markup=None) -> bool:
         caption = self._truncate_caption(caption)
-        await self._retry(
+        result = await self._retry(
             lambda: self._bot.send_video(
                 chat_id=self._chat_id,
                 video=InputFile(io.BytesIO(data), filename=filename),
@@ -126,6 +126,7 @@ class TelegramSender:
                 reply_markup=reply_markup,
             )
         )
+        return result is not None
 
     async def send_voice(self, data: bytes, caption: str = "", reply_markup=None) -> None:
         caption = self._truncate_caption(caption)

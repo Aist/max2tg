@@ -1,4 +1,4 @@
-"""Tests for app/tg_sender.py — TelegramSender.send_poll."""
+"""Tests for app/tg_sender.py — TelegramSender.send_poll, send_video."""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -12,6 +12,7 @@ def _make_sender() -> TelegramSender:
     sender = TelegramSender.__new__(TelegramSender)
     sender._bot = MagicMock()
     sender._bot.send_poll = AsyncMock()
+    sender._bot.send_video = AsyncMock()
     sender._chat_id = "123"
     return sender
 
@@ -57,3 +58,24 @@ class TestSendPoll:
 
         sent_options = sender._bot.send_poll.await_args.kwargs["options"]
         assert len(sent_options) == PollLimit.MAX_OPTION_NUMBER
+
+
+class TestSendVideo:
+    @pytest.mark.asyncio
+    async def test_returns_true_on_success(self):
+        sender = _make_sender()
+        sender._bot.send_video.return_value = MagicMock()
+
+        result = await sender.send_video(b"data", caption="cap")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_telegram_rejects_upload(self):
+        from telegram.error import BadRequest
+        sender = _make_sender()
+        sender._bot.send_video.side_effect = BadRequest("Request Entity Too Large")
+
+        result = await sender.send_video(b"data", caption="cap")
+
+        assert result is False

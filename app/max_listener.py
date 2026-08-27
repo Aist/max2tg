@@ -75,6 +75,37 @@ async def _send_attach(
         return True
 
     if atype == "VIDEO":
+        video_id = attach.get("videoId")
+        token = attach.get("token")
+        log.info("Get url by chatId=%s video_id=%s messageId=%s", chat_id, video_id, message_id)
+        if video_id and chat_id and message_id:
+            resp = await client.cmd(
+                OpCode.GET_VIDEO_URL,
+                {
+                    "chatId": chat_id,
+                    "videoId": video_id,
+                    "messageId": message_id,
+                    "token": token,
+                },
+            )
+            url = None
+            for quality in ("MP4_1080", "MP4_720", "MP4_480", "MP4_360", "MP4_240", "MP4_144"):
+                if resp.get(quality):
+                    url = resp[quality]
+                    break
+            log.info("Got url by videoId: %s", url)
+            if url:
+                data = await client.download_file(url, omit_origin=True)
+                if data:
+                    if await sender.send_video(data, caption=header_text, reply_markup=kb):
+                        return True
+                    log.warning("failed to send video to Telegram, falling back to thumbnail: %s", url)
+                else:
+                    log.warning("failed to download video: %s", url)
+            else:
+                log.warning("failed to find video url: %s", resp)
+
+        # video not downloaded
         thumb = attach.get("thumbnail")
         if thumb:
             data = await client.download_file(thumb)
