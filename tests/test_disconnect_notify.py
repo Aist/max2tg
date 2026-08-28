@@ -153,14 +153,7 @@ class TestDisconnectThrottle:
 class TestReconnectNotification:
     """Tests for 'connection restored' notification on reconnect."""
 
-    async def test_startup_notification_sent_on_first_connect(self):
-        client, sender = _make_client()
-        snapshot = {"profile": {"id": 1, "names": []}, "chats": []}
-        await client._on_ready_cb(snapshot)
-        sender.send.assert_called_once()
-        assert "подключён" in sender.send.call_args[0][0]
-
-    async def test_startup_notification_includes_chat_count(self):
+    async def test_first_connect_is_silent(self):
         client, sender = _make_client()
         snapshot = {
             "profile": {"id": 1, "names": []},
@@ -169,8 +162,11 @@ class TestReconnectNotification:
                 {"id": 101, "type": "GROUP", "title": "Chat B", "participants": {}},
             ],
         }
+
         await client._on_ready_cb(snapshot)
-        assert "2" in sender.send.call_args[0][0]
+
+        # Starting up is not news — only losing and regaining the connection is.
+        sender.send.assert_not_called()
 
     async def test_notification_sent_on_reconnect(self):
         client, sender = _make_client()

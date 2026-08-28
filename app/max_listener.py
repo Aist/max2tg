@@ -312,9 +312,6 @@ def create_max_client(
                 for message in messages:
                     client.process_message({"message": message, "chatId": chat_id})
             log.info("Catch-up: re-read %d message(s) from %d chat(s)", recovered, len(chat_ids))
-        else:
-            chat_count = len(resolver.chats)
-            await sender.send(f"✅ <b>Max:</b> подключён | чатов: {chat_count}")
         _first_connect = False
 
     @client.on_disconnect
