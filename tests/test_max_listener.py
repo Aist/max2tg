@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.max_listener import _human_size, _guess_media_kind, _send_attach
+from app.max_listener import _human_size, _guess_media_kind, _send_attach, create_max_client
 
 
 # ---------------------------------------------------------------------------
@@ -338,3 +338,19 @@ class TestSendAttachVideo:
         sender.send_video.assert_not_called()
         sender.send_photo.assert_not_called()
         sender.send.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# create_max_client — proxy_url wiring
+# ---------------------------------------------------------------------------
+
+class TestCreateMaxClientProxy:
+    def test_proxy_url_passed_to_max_client(self):
+        client = create_max_client(
+            "tok", "dev", sender=MagicMock(), proxy_url="socks5://127.0.0.1:1080"
+        )
+        assert client.proxy_url == "socks5://127.0.0.1:1080"
+
+    def test_proxy_url_defaults_to_none(self):
+        client = create_max_client("tok", "dev", sender=MagicMock())
+        assert client.proxy_url is None

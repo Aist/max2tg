@@ -71,6 +71,8 @@ async def main():
         log.info("Using Telegram proxy: %s", settings.tg_proxy.split("@")[-1])
     if settings.tg_base_url:
         log.info("Using Telegram base url: %s", settings.tg_base_url)
+    if settings.max_proxy:
+        log.info("Using Max proxy: %s", settings.max_proxy.split("@")[-1])
 
     sender = TelegramSender(
         settings.tg_bot_token,
@@ -85,7 +87,7 @@ async def main():
 
     client = create_max_client(
         settings.max_token, settings.max_device_id, sender, settings.max_chat_ids,
-        debug=settings.debug, reply_enabled=settings.reply_enabled,
+        debug=settings.debug, reply_enabled=settings.reply_enabled, proxy_url=settings.max_proxy,
     )
 
     tg_app = None
