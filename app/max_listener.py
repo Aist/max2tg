@@ -6,7 +6,7 @@ from typing import Any
 
 from app.max_client import MaxClient, MaxMessage, OpCode
 from app.resolver import ContactResolver
-from app.tg_sender import SendStatus, TelegramSender, reply_keyboard
+from app.tg_sender import ScopedSender, SendStatus, TelegramSender, reply_keyboard
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ def _guess_media_kind(filename: str) -> str:
 async def _send_attach(
     attach: dict,
     client: MaxClient,
-    sender: TelegramSender,
+    sender: TelegramSender | ScopedSender,
     header_text: str,
     chat_id: Any,
     message_id: Any,
@@ -174,7 +174,7 @@ async def _handle_forward_message(
     link: dict,
     header_text: str,
     client: MaxClient,
-    sender: TelegramSender,
+    sender: TelegramSender | ScopedSender,
     resolver: ContactResolver,
     kb=None,
 ) -> SendStatus:
@@ -360,14 +360,17 @@ def create_max_client(
             chat_label = escape(resolver.chat_name(msg.chat_id))
         header_text = _header(msg, sender_label, chat_label, is_dm)
         kb = reply_keyboard(msg.chat_id) if reply_enabled else None
+        # Only recipients subscribed to this Max chat see what follows;
+        # status notices keep using the unscoped sender and reach everyone.
+        scoped = sender.for_max_chat(msg.chat_id)
 
         link = msg.link
         link_type = link.get("type") if isinstance(link, dict) else None
 
         if link_type == "FORWARD":
-            status = await _handle_forward_message(link, header_text, client, sender, resolver, kb=kb)
+            status = await _handle_forward_message(link, header_text, client, scoped, resolver, kb=kb)
             if msg.text:
-                status = SendStatus.worst(status, await sender.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb))
+                status = SendStatus.worst(status, await scoped.send(f"{header_text}\n{escape(msg.text)}", reply_markup=kb))
             _log_delivery(status, "forwarded message")
             return
 
@@ -390,15 +393,15 @@ def create_max_client(
                     text_sent = bool(msg.text)
                 else:
                     cap = header_text
-                status = await _send_attach(attach, client, sender, cap, msg.chat_id, msg.message_id, kb=kb)
+                status = await _send_attach(attach, client, scoped, cap, msg.chat_id, msg.message_id, kb=kb)
                 if status is not None:
                     _log_delivery(status, f"attach _type={attach.get('_type')}")
 
             if msg.text and not text_sent:
-                _log_delivery(await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
+                _log_delivery(await scoped.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
         else:
             if msg.text:
-                _log_delivery(await sender.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
+                _log_delivery(await scoped.send(f"{header_text}\n{reply}{escape(msg.text)}", reply_markup=kb), "text")
             else:
                 log.warning("Нетекстовое сообщение! %s", msg.attaches)
 

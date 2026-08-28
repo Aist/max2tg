@@ -262,3 +262,77 @@ class TestFanOut:
 
         assert len(sender._recipients[0].outbox) == 0
         assert len(sender._recipients[1].outbox) == 1
+
+
+class TestRouting:
+    """A recipient named in routes gets only those Max chats; the rest get everything."""
+
+    def _routed(self) -> TelegramSender:
+        sender = _make_sender(chat_ids=("everything", "school-only"))
+        sender._recipients[1].sources = frozenset({"-758"})
+        return sender
+
+    @pytest.mark.asyncio
+    async def test_subscribed_chat_reaches_both(self):
+        sender = self._routed()
+
+        await sender.send("school news", source="-758")
+
+        assert _sent_to(sender, "everything") == ["school news"]
+        assert _sent_to(sender, "school-only") == ["school news"]
+
+    @pytest.mark.asyncio
+    async def test_other_chat_skips_the_narrowed_recipient(self):
+        sender = self._routed()
+
+        await sender.send("unrelated", source="-781")
+
+        assert _sent_to(sender, "everything") == ["unrelated"]
+        assert _sent_to(sender, "school-only") == []
+
+    @pytest.mark.asyncio
+    async def test_status_notices_reach_everyone(self):
+        sender = self._routed()
+
+        await sender.send("connection restored")
+
+        assert _sent_to(sender, "everything") == ["connection restored"]
+        assert _sent_to(sender, "school-only") == ["connection restored"]
+
+    @pytest.mark.asyncio
+    async def test_numeric_source_matches_configured_string(self):
+        sender = self._routed()
+
+        await sender.send("school news", source=-758)
+
+        assert _sent_to(sender, "school-only") == ["school news"]
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_sent_when_no_recipient_subscribes(self):
+        sender = _make_sender(chat_ids=("school-only",))
+        sender._recipients[0].sources = frozenset({"-758"})
+
+        status = await sender.send("unrelated", source="-781")
+
+        assert status is SendStatus.OK
+        sender._bot.send_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scoped_sender_binds_the_source(self):
+        sender = self._routed()
+
+        scoped = sender.for_max_chat(-781)
+        await scoped.send("unrelated")
+
+        assert scoped.source == "-781"
+        assert _sent_to(sender, "everything") == ["unrelated"]
+        assert _sent_to(sender, "school-only") == []
+
+    def test_routes_are_applied_at_construction(self):
+        sender = TelegramSender(
+            "123456:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKKLLL",
+            ["111", "222"],
+            routes={"222": ["-758"]},
+        )
+        assert sender._recipients[0].sources is None
+        assert sender._recipients[1].sources == frozenset({"-758"})

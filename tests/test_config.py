@@ -181,3 +181,69 @@ class TestLoadSettingsMissing:
         with pytest.raises(SystemExit) as exc:
             _load_settings_with_env(_env(MAX_TOKEN=""))
         assert "MAX_TOKEN" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# TG_ROUTES — per-recipient filtering
+# ---------------------------------------------------------------------------
+
+class TestRouteParsing:
+    def test_no_routes_means_everyone_gets_everything(self):
+        s = _load_settings_with_env(_env())
+        assert s.tg_route_map == {}
+
+    def test_single_route(self):
+        s = _load_settings_with_env(_env(
+            TG_CHAT_ID="-100123456,-100999",
+            MAX_CHAT_IDS="-758,-781",
+            TG_ROUTES="-100999:-758",
+        ))
+        assert s.tg_route_map == {"-100999": frozenset({"-758"})}
+
+    def test_several_chats_for_one_recipient(self):
+        s = _load_settings_with_env(_env(
+            TG_CHAT_ID="-100123456,-100999",
+            MAX_CHAT_IDS="-758,-781",
+            TG_ROUTES="-100999:-758,-781",
+        ))
+        assert s.tg_route_map == {"-100999": frozenset({"-758", "-781"})}
+
+    def test_several_routes_and_surrounding_whitespace(self):
+        s = _load_settings_with_env(_env(
+            TG_CHAT_ID="-100123456, -100999, -100777",
+            MAX_CHAT_IDS="-758,-781",
+            TG_ROUTES=" -100999 : -758 ; -100777 : -781 ",
+        ))
+        assert s.tg_route_map == {
+            "-100999": frozenset({"-758"}),
+            "-100777": frozenset({"-781"}),
+        }
+
+
+class TestRouteValidation:
+    """A route that can never match is a typo — it must not fail silently at runtime."""
+
+    def test_route_to_unlisted_recipient_raises(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_CHAT_IDS="-758", TG_ROUTES="-100999:-758"))
+        assert "TG_CHAT_ID" in str(exc.value)
+
+    def test_route_without_any_max_chat_raises(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(TG_ROUTES="-100123456:"))
+        assert "no Max chats" in str(exc.value)
+
+    def test_route_to_chat_not_forwarded_at_all_raises(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_CHAT_IDS="-758", TG_ROUTES="-100123456:-781"))
+        assert "MAX_CHAT_IDS" in str(exc.value)
+
+    def test_non_numeric_max_chat_raises(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(TG_ROUTES="-100123456:notanid"))
+        assert "not a valid Max chat id" in str(exc.value)
+
+    def test_any_max_chat_allowed_when_max_chat_ids_is_unset(self):
+        # No MAX_CHAT_IDS means every Max chat is forwarded, so no route can be dead.
+        s = _load_settings_with_env(_env(TG_ROUTES="-100123456:-758"))
+        assert s.tg_route_map == {"-100123456": frozenset({"-758"})}

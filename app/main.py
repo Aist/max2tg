@@ -78,6 +78,7 @@ async def main():
         write_timeout=settings.tg_write_timeout,
         media_write_timeout=settings.tg_media_write_timeout,
         max_retries=settings.tg_max_retries,
+        routes=settings.tg_route_map,
     )
     await sender.start()
 

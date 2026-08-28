@@ -5,7 +5,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Awaitable, Callable, Sequence
+from typing import Awaitable, Callable, Iterable, Mapping, Sequence
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ParseMode, PollLimit
@@ -70,6 +70,7 @@ class _Recipient:
     """One Telegram chat with its own queue, so a stuck chat cannot hold up the others."""
 
     chat_id: str
+    sources: frozenset[str] | None = None  # None = every Max chat
     outbox: deque[_Pending] = field(default_factory=deque)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -99,15 +100,19 @@ class TelegramSender:
             write_timeout: int | None = None,
             media_write_timeout: int | None = None,
             max_retries: int | None = None,
+            routes: Mapping[str, Iterable[str]] | None = None,
     ):
         request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
         self._bot = Bot(token=token, request=request)
         raw_ids = [chat_id] if isinstance(chat_id, str) else list(chat_id)
         # Accept both a parsed list and a raw "111,222" env value.
-        self._recipients = [
-            _Recipient(part.strip())
-            for raw in raw_ids for part in str(raw).split(",") if part.strip()
-        ]
+        ids = [part.strip() for raw in raw_ids for part in str(raw).split(",") if part.strip()]
+        # A recipient named in routes only gets those Max chats; everyone else gets all.
+        narrowed = {
+            str(k).strip(): frozenset(str(v).strip() for v in vs)
+            for k, vs in (routes or {}).items()
+        }
+        self._recipients = [_Recipient(cid, narrowed.get(cid)) for cid in ids]
         if not self._recipients:
             raise ValueError("TelegramSender needs at least one chat id")
         self._max_retries = max(1, max_retries or DEFAULT_MAX_RETRIES)
@@ -198,6 +203,17 @@ class TelegramSender:
         log.warning("Telegram: %s failed after %d attempts", name, self._max_retries)
         return False, True
 
+    def _recipients_for(self, source: str | None) -> list[_Recipient]:
+        """Recipients subscribed to this Max chat. A None source means everyone — status notices."""
+        if source is None:
+            return self._recipients
+        source = str(source)
+        return [r for r in self._recipients if r.sources is None or source in r.sources]
+
+    def for_max_chat(self, source) -> "ScopedSender":
+        """A view of this sender bound to one Max chat, for handlers that forward its messages."""
+        return ScopedSender(self, str(source))
+
     def _name_for(self, base: str, rcpt: _Recipient) -> str:
         return base if len(self._recipients) == 1 else f"{base} → {rcpt.chat_id}"
 
@@ -221,11 +237,16 @@ class TelegramSender:
                 return SendStatus.DROPPED
             return self._enqueue(rcpt, name, coro_factory, "delivery failed")
 
-    async def _dispatch(self, base_name: str, make_coro: Callable[[str], Awaitable]) -> SendStatus:
-        """Send to every recipient. Each has its own queue, so one broken chat cannot stall the rest."""
+    async def _dispatch(self, base_name: str, make_coro: Callable[[str], Awaitable],
+                        source: str | None = None) -> SendStatus:
+        """Send to every subscribed recipient. Each has its own queue, so one broken chat cannot stall the rest."""
+        recipients = self._recipients_for(source)
+        if not recipients:
+            log.debug("No recipient subscribed to Max chat %s — skipping %s", source, base_name)
+            return SendStatus.OK
         statuses = await asyncio.gather(*(
             self._dispatch_one(r, self._name_for(base_name, r), lambda r=r: make_coro(r.chat_id))
-            for r in self._recipients
+            for r in recipients
         ))
         return SendStatus.worst(*statuses)
 
@@ -270,7 +291,7 @@ class TelegramSender:
     # public API
     # ------------------------------------------------------------------
 
-    async def send(self, text: str, reply_markup=None) -> SendStatus:
+    async def send(self, text: str, reply_markup=None, source: str | None = None) -> SendStatus:
         if not text:
             return SendStatus.OK
 
@@ -284,10 +305,11 @@ class TelegramSender:
                 text=text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
 
-    async def send_photo(self, data: bytes, caption: str = "", filename: str = "photo.jpg", reply_markup=None) -> SendStatus:
+    async def send_photo(self, data: bytes, caption: str = "", filename: str = "photo.jpg", reply_markup=None, source: str | None = None) -> SendStatus:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("photo", caption),
@@ -297,10 +319,11 @@ class TelegramSender:
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
 
-    async def send_document(self, data: bytes, caption: str = "", filename: str = "file", reply_markup=None) -> SendStatus:
+    async def send_document(self, data: bytes, caption: str = "", filename: str = "file", reply_markup=None, source: str | None = None) -> SendStatus:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("document", filename),
@@ -310,10 +333,11 @@ class TelegramSender:
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
 
-    async def send_video(self, data: bytes, caption: str = "", filename: str = "video.mp4", reply_markup=None) -> SendStatus:
+    async def send_video(self, data: bytes, caption: str = "", filename: str = "video.mp4", reply_markup=None, source: str | None = None) -> SendStatus:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("video", filename),
@@ -323,10 +347,11 @@ class TelegramSender:
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
 
-    async def send_voice(self, data: bytes, caption: str = "", reply_markup=None) -> SendStatus:
+    async def send_voice(self, data: bytes, caption: str = "", reply_markup=None, source: str | None = None) -> SendStatus:
         caption = self._truncate_caption(caption)
         voice_name = _label("voice", caption)
         audio_name = _label("audio", caption)
@@ -361,19 +386,21 @@ class TelegramSender:
                 rcpt, self._name_for(audio_name, rcpt), lambda: audio(rcpt.chat_id)
             )
 
-        return SendStatus.worst(*await asyncio.gather(*(deliver(r) for r in self._recipients)))
+        recipients = self._recipients_for(source)
+        return SendStatus.worst(*await asyncio.gather(*(deliver(r) for r in recipients)))
 
-    async def send_sticker(self, data: bytes, reply_markup=None) -> SendStatus:
+    async def send_sticker(self, data: bytes, reply_markup=None, source: str | None = None) -> SendStatus:
         return await self._dispatch(
             "sticker",
             lambda chat_id: self._bot.send_sticker(
                 chat_id=chat_id,
                 sticker=InputFile(io.BytesIO(data), filename="sticker.webp"),
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
 
-    async def send_poll(self, question: str, options: Sequence[str], reply_markup=None) -> SendStatus:
+    async def send_poll(self, question: str, options: Sequence[str], reply_markup=None, source: str | None = None) -> SendStatus:
         """Send a poll. Caller must ensure at least PollLimit.MIN_OPTION_NUMBER non-empty options."""
         question = self._truncate(question, PollLimit.MAX_QUESTION_LENGTH)
         options = [
@@ -390,5 +417,43 @@ class TelegramSender:
                 is_anonymous=False,
                 allows_multiple_answers=False,
                 reply_markup=reply_markup,
-            )
+            ),
+            source=source,
         )
+
+
+class ScopedSender:
+    """A TelegramSender bound to one Max chat.
+
+    Message handlers forward what they get without knowing who subscribes to that
+    chat; binding the source once here keeps the routing decision in one place.
+    """
+
+    def __init__(self, sender: TelegramSender, source: str):
+        self._sender = sender
+        self._source = source
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    async def send(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send(*args, source=self._source, **kwargs)
+
+    async def send_photo(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_photo(*args, source=self._source, **kwargs)
+
+    async def send_document(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_document(*args, source=self._source, **kwargs)
+
+    async def send_video(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_video(*args, source=self._source, **kwargs)
+
+    async def send_voice(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_voice(*args, source=self._source, **kwargs)
+
+    async def send_sticker(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_sticker(*args, source=self._source, **kwargs)
+
+    async def send_poll(self, *args, **kwargs) -> SendStatus:
+        return await self._sender.send_poll(*args, source=self._source, **kwargs)

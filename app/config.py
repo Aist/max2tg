@@ -16,6 +16,7 @@ class Settings:
     tg_write_timeout: int | None = None
     tg_media_write_timeout: int | None = None
     tg_max_retries: int | None = None
+    tg_routes: str | None = None
     debug: bool = False
     reply_enabled: bool = False
 
@@ -23,6 +24,60 @@ class Settings:
     def tg_chat_ids(self) -> list[str]:
         """TG_CHAT_ID may list several chats, comma-separated — each gets every message."""
         return [c.strip() for c in self.tg_chat_id.split(",") if c.strip()]
+
+    @property
+    def max_chat_id_list(self) -> list[str]:
+        """MAX_CHAT_IDS, parsed. Empty means every Max chat is forwarded."""
+        return [c.strip() for c in (self.max_chat_ids or "").split(",") if c.strip()]
+
+    @property
+    def tg_route_map(self) -> dict[str, frozenset[str]]:
+        """Recipients that should get only some Max chats.
+
+        TG_ROUTES holds "<tg chat>:<max chat>[,<max chat>...]" entries separated by ";".
+        A recipient absent from here receives everything.
+        """
+        routes: dict[str, frozenset[str]] = {}
+        for entry in (self.tg_routes or "").split(";"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            recipient, _, sources = entry.partition(":")
+            routes[recipient.strip()] = frozenset(
+                c.strip() for c in sources.split(",") if c.strip()
+            )
+        return routes
+
+
+def _validate_routes(settings: Settings) -> None:
+    """A route that can never match is a typo, not a preference — fail loudly at startup."""
+    recipients = settings.tg_chat_ids
+    forwarded = settings.max_chat_id_list
+
+    for recipient, sources in settings.tg_route_map.items():
+        try:
+            int(recipient)
+        except ValueError:
+            raise SystemExit(f"TG_ROUTES: {recipient!r} is not a valid Telegram chat id")
+        if recipient not in recipients:
+            raise SystemExit(
+                f"TG_ROUTES routes to {recipient}, which is not listed in TG_CHAT_ID"
+            )
+        if not sources:
+            raise SystemExit(
+                f"TG_ROUTES entry for {recipient} lists no Max chats — "
+                "drop the entry to send everything, or name the chats"
+            )
+        for source in sources:
+            try:
+                int(source)
+            except ValueError:
+                raise SystemExit(f"TG_ROUTES: {source!r} is not a valid Max chat id")
+            if forwarded and source not in forwarded:
+                raise SystemExit(
+                    f"TG_ROUTES sends Max chat {source} to {recipient}, "
+                    "but MAX_CHAT_IDS does not forward that chat at all"
+                )
 
 
 def load_settings() -> Settings:
@@ -48,7 +103,7 @@ def load_settings() -> Settings:
                 f"TG_CHAT_ID must be a comma-separated list of integers, got: {cid!r}"
             )
 
-    return Settings(
+    settings = Settings(
         max_token=os.environ["MAX_TOKEN"],
         max_device_id=os.environ["MAX_DEVICE_ID"],
         tg_bot_token=os.environ["TG_BOT_TOKEN"],
@@ -59,6 +114,9 @@ def load_settings() -> Settings:
         tg_write_timeout=int(os.environ.get("TG_WRITE_TIMEOUT", 0)) or None,
         tg_media_write_timeout=int(os.environ.get("TG_MEDIA_WRITE_TIMEOUT", 0)) or None,
         tg_max_retries=int(os.environ.get("TG_MAX_RETRIES", 0)) or None,
+        tg_routes=os.environ.get("TG_ROUTES") or None,
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
     )
+    _validate_routes(settings)
+    return settings

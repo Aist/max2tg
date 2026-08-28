@@ -55,6 +55,14 @@
 2. Скопируйте полученный токен → это ваш `TG_BOT_TOKEN`
 3. Узнайте свой chat ID: напишите [@userinfobot](https://t.me/userinfobot) → он ответит вашим ID → это `TG_CHAT_ID`
 4. Чтобы подключить ещё людей, перечислите их ID через запятую: `TG_CHAT_ID=111,222`. Каждый получатель обслуживается независимо — если у одного из них доставка сломалась, остальным сообщения идут без задержки.
+5. Если получателю нужны не все чаты Max, а только часть — опишите это в `TG_ROUTES`:
+   ```env
+   MAX_CHAT_IDS=-758,-781
+   TG_CHAT_ID=111,-1001234567890
+   TG_ROUTES=-1001234567890:-758
+   ```
+   Здесь `111` получает оба чата, а группа `-1001234567890` — только `-758`. Маршрут, который не может сработать (получателя нет в `TG_CHAT_ID`, либо чат Max не пересылается вовсе), считается опечаткой: бот откажется стартовать и скажет, что не так.
+   Служебные уведомления о связи с Max маршрутизацию игнорируют и приходят всем.
    Каждый новый человек должен сначала сам написать боту `/start`, иначе Telegram запретит боту первым начинать диалог
 4. **Важно:** напишите вашему боту `/start`, чтобы он мог вам отправлять сообщения
 
@@ -75,6 +83,7 @@ cp .env.example .env
 | `MAX_CHAT_IDS`  | нет          | список ID чатов Max, разделенных запятой       |
 | `TG_BOT_TOKEN`  | да           | Токен Telegram-бота                            |
 | `TG_CHAT_ID`    | да           | ID чата, куда пересылать сообщения. Можно несколько через запятую — каждый получит все сообщения |
+| `TG_ROUTES`     | нет          | Сужает поток для отдельных получателей: `<чат TG>:<чат Max>[,<чат Max>...]`, записи через `;`. Кого здесь нет — получает всё |
 | `DEBUG`         | нет          | `true` — подробные логи + дамп JSON в `debug/` |
 | `REPLY_ENABLED` | нет          | `true` — разрешить ответы из Telegram в Max    |
 | `LOG_DIR`       | нет          | Путь к директории логов (по умолчанию `logs`)  |
@@ -347,6 +356,14 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 2. Copy the token → this is your `TG_BOT_TOKEN`
 3. Get your chat ID: message [@userinfobot](https://t.me/userinfobot) → it replies with your ID → this is `TG_CHAT_ID`
 4. To add more people, list their ids comma-separated: `TG_CHAT_ID=111,222`. Every recipient has its own queue, so a broken chat never delays the others.
+5. If a recipient should get only some of the Max chats, describe it in `TG_ROUTES`:
+   ```env
+   MAX_CHAT_IDS=-758,-781
+   TG_CHAT_ID=111,-1001234567890
+   TG_ROUTES=-1001234567890:-758
+   ```
+   Here `111` receives both chats while the group `-1001234567890` receives only `-758`. A route that can never match (the recipient is missing from `TG_CHAT_ID`, or the Max chat is not forwarded at all) is treated as a typo: the bot refuses to start and says what is wrong.
+   Connection status notices ignore routing and reach everyone.
    Each new person must send the bot a `/start` first — Telegram forbids bots from opening a conversation
 4. **Important:** send `/start` to your bot so it can message you
 
@@ -367,6 +384,7 @@ cp .env.example .env
 | `MAX_CHAT_IDS` | no | Comma-separated list of Max chat IDs to listen to (all chats if unset) |
 | `TG_BOT_TOKEN` | yes | Telegram bot token |
 | `TG_CHAT_ID` | yes | Chat ID to forward messages to. Several ids may be listed comma-separated — each one receives every message |
+| `TG_ROUTES` | no | Narrows what individual recipients get: `<tg chat>:<max chat>[,<max chat>...]`, entries separated by `;`. A recipient absent from here receives everything |
 | `DEBUG` | no | `true` — verbose logs + JSON dumps to `debug/` |
 | `REPLY_ENABLED` | no | `true` — enable replies from Telegram to Max |
 | `LOG_DIR` | no | Log directory path (default: `logs`) |
