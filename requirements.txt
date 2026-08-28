@@ -1,4 +1,5 @@
 aiohttp>=3.9.0
+aiohttp-socks>=0.10.0
 python-telegram-bot>=21.0
 python-dotenv>=1.0.0
 httpx[socks]>=0.24.0

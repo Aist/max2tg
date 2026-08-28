@@ -1,6 +1,8 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
 import pytest
+from unittest.mock import patch
+
 from app.max_client import MaxClient, MaxMessage, OpCode
 
 
@@ -282,6 +284,31 @@ class TestMaxClientInit:
         c2 = MaxClient(token="tok", device_id="dev")
         assert c1.chat_ids == [1, 2]
         assert c2.chat_ids == []
+
+    def test_proxy_url_default_none(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c.proxy_url is None
+
+    def test_proxy_url_stored(self):
+        c = MaxClient(token="tok", device_id="dev", proxy_url="socks5://127.0.0.1:1080")
+        assert c.proxy_url == "socks5://127.0.0.1:1080"
+
+
+class TestMakeConnector:
+    """Tests for MaxClient._make_connector."""
+
+    def test_returns_none_without_proxy(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c._make_connector() is None
+
+    def test_builds_proxy_connector_from_url(self):
+        c = MaxClient(token="tok", device_id="dev", proxy_url="socks5://user:pass@127.0.0.1:1080")
+
+        with patch("app.max_client.ProxyConnector") as proxy_connector_cls:
+            connector = c._make_connector()
+
+        proxy_connector_cls.from_url.assert_called_once_with("socks5://user:pass@127.0.0.1:1080")
+        assert connector is proxy_connector_cls.from_url.return_value
 
 
 class TestMaskSensitive:

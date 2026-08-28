@@ -71,6 +71,7 @@ cp .env.example .env
 | `MAX_TOKEN`     | да           | Токен авторизации Max                          |
 | `MAX_DEVICE_ID` | да           | ID устройства Max                              |
 | `MAX_CHAT_IDS`  | нет          | список ID чатов Max, разделенных запятой       |
+| `MAX_PROXY`     | нет          | SOCKS5-прокси для подключения к Max (`socks5://host:port`) |
 | `TG_BOT_TOKEN`  | да           | Токен Telegram-бота                            |
 | `TG_CHAT_ID`    | да           | ID чата, куда пересылать сообщения             |
 | `DEBUG`         | нет          | `true` — подробные логи + дамп JSON в `debug/` |
@@ -336,6 +337,7 @@ cp .env.example .env
 | `MAX_TOKEN` | yes | Max auth token |
 | `MAX_DEVICE_ID` | yes | Max device ID |
 | `MAX_CHAT_IDS` | no | Comma-separated list of Max chat IDs to listen to (all chats if unset) |
+| `MAX_PROXY` | no | SOCKS5 proxy for connecting to Max (`socks5://host:port`) |
 | `TG_BOT_TOKEN` | yes | Telegram bot token |
 | `TG_CHAT_ID` | yes | Chat ID to forward messages to |
 | `DEBUG` | no | `true` — verbose logs + JSON dumps to `debug/` |

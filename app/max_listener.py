@@ -289,9 +289,10 @@ def _human_size(n: int) -> str:
 
 def create_max_client(
     max_token: str, max_device_id: str, sender: TelegramSender, max_chat_ids: str | None = None,
-    debug: bool = False, reply_enabled: bool = False,
+    debug: bool = False, reply_enabled: bool = False, proxy_url: str | None = None,
 ) -> MaxClient:
-    client = MaxClient(token=max_token, device_id=max_device_id, debug=debug, chat_ids=max_chat_ids)
+    client = MaxClient(token=max_token, device_id=max_device_id, debug=debug, chat_ids=max_chat_ids,
+                        proxy_url=proxy_url)
     resolver = ContactResolver(client=client)
 
     _first_connect = True

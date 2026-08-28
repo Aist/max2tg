@@ -149,6 +149,22 @@ class TestLoadSettingsValid:
         s = _load_settings_with_env(_env(TG_BASE_URL="http://localhost:8081//"))
         assert s.tg_base_url == "http://localhost:8081"
 
+    def test_max_proxy_none_when_not_set(self):
+        s = _load_settings_with_env(_env())
+        assert s.max_proxy is None
+
+    def test_max_proxy_populated_when_set(self):
+        s = _load_settings_with_env(_env(MAX_PROXY="socks5://user:pass@127.0.0.1:1080"))
+        assert s.max_proxy == "socks5://user:pass@127.0.0.1:1080"
+
+    def test_max_proxy_none_when_empty_string(self):
+        s = _load_settings_with_env(_env(MAX_PROXY=""))
+        assert s.max_proxy is None
+
+    def test_max_proxy_socks5h_normalized_to_socks5(self):
+        s = _load_settings_with_env(_env(MAX_PROXY="socks5h://user:pass@127.0.0.1:1080"))
+        assert s.max_proxy == "socks5://user:pass@127.0.0.1:1080"
+
 
 # ---------------------------------------------------------------------------
 # load_settings — missing required variables

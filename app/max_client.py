@@ -10,6 +10,7 @@ from enum import IntEnum
 from typing import Any
 
 import aiohttp
+from aiohttp_socks import ProxyConnector
 
 log = logging.getLogger(__name__)
 
@@ -96,10 +97,12 @@ class MaxClient:
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
 
-    def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False):
+    def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False,
+                 proxy_url: str | None = None):
         self.token = token
         self.device_id = device_id
         self.debug = debug
+        self.proxy_url = proxy_url
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._seq = 0
         self._my_id = None
@@ -173,13 +176,19 @@ class MaxClient:
                 log.exception("Heartbeat error, stopping heartbeat loop")
                 break
 
+    def _make_connector(self) -> ProxyConnector | None:
+        """Build a SOCKS5/SOCKS4/HTTP proxy connector for self.proxy_url, or None."""
+        if not self.proxy_url:
+            return None
+        return ProxyConnector.from_url(self.proxy_url)
+
     # ── main loop ──────────────────────────────────────────────────
 
     async def run(self):
         if self.debug:
             os.makedirs(DEBUG_DIR, exist_ok=True)
 
-        async with aiohttp.ClientSession(headers=_BROWSER_HEADERS) as session:
+        async with aiohttp.ClientSession(headers=_BROWSER_HEADERS, connector=self._make_connector()) as session:
             self._session = session
             while True:
                 try:
@@ -349,7 +358,7 @@ class MaxClient:
         session = getattr(self, "_session", None)
         close_after = False
         if session is None or session.closed:
-            session = aiohttp.ClientSession(headers=_BROWSER_HEADERS)
+            session = aiohttp.ClientSession(headers=_BROWSER_HEADERS, connector=self._make_connector())
             close_after = True
         headers = _HTTP_HEADERS_NO_ORIGIN if omit_origin else _HTTP_HEADERS
         try:
