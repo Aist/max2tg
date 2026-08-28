@@ -65,6 +65,15 @@ class _Pending:
     created: float = field(default_factory=time.monotonic)
 
 
+@dataclass
+class _Recipient:
+    """One Telegram chat with its own queue, so a stuck chat cannot hold up the others."""
+
+    chat_id: str
+    outbox: deque[_Pending] = field(default_factory=deque)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
 def _label(kind: str, text: str = "") -> str:
     """Short human-readable name of a send, used in logs."""
     if not text:
@@ -84,7 +93,7 @@ class TelegramSender:
     def __init__(
             self,
             token: str,
-            chat_id: str,
+            chat_id: str | Sequence[str],
             proxy_url: str | None = None,
             read_timeout: int | None = None,
             write_timeout: int | None = None,
@@ -93,10 +102,15 @@ class TelegramSender:
     ):
         request = HTTPXRequest(proxy=proxy_url, read_timeout=read_timeout, write_timeout=write_timeout, media_write_timeout=media_write_timeout)
         self._bot = Bot(token=token, request=request)
-        self._chat_id = chat_id
+        raw_ids = [chat_id] if isinstance(chat_id, str) else list(chat_id)
+        # Accept both a parsed list and a raw "111,222" env value.
+        self._recipients = [
+            _Recipient(part.strip())
+            for raw in raw_ids for part in str(raw).split(",") if part.strip()
+        ]
+        if not self._recipients:
+            raise ValueError("TelegramSender needs at least one chat id")
         self._max_retries = max(1, max_retries or DEFAULT_MAX_RETRIES)
-        self._outbox: deque[_Pending] = deque()
-        self._lock = asyncio.Lock()
         self._flusher: asyncio.Task | None = None
 
     @property
@@ -104,14 +118,18 @@ class TelegramSender:
         return self._bot
 
     @property
+    def chat_ids(self) -> list[str]:
+        return [r.chat_id for r in self._recipients]
+
+    @property
     def outbox_size(self) -> int:
-        return len(self._outbox)
+        return sum(len(r.outbox) for r in self._recipients)
 
     async def start(self):
         await self._bot.initialize()
         try:
             me = await self._bot.get_me()
-            log.info("Telegram bot ready: @%s", me.username)
+            log.info("Telegram bot ready: @%s → %s", me.username, ", ".join(self.chat_ids))
         except Exception as e:
             # Telegram may be unreachable at startup; sends are queued until it is back.
             log.error("Telegram unreachable at startup (%s): %s", type(e).__name__, e)
@@ -126,8 +144,8 @@ class TelegramSender:
             except asyncio.CancelledError:
                 pass
             self._flusher = None
-        if self._outbox:
-            log.error("Shutting down with %d undelivered message(s) in the outbox", len(self._outbox))
+        if self.outbox_size:
+            log.error("Shutting down with %d undelivered message(s) in the outbox", self.outbox_size)
         await self._bot.shutdown()
 
     def _truncate(self, text: str, limit: int, suffix: str = "…") -> str:
@@ -180,25 +198,36 @@ class TelegramSender:
         log.warning("Telegram: %s failed after %d attempts", name, self._max_retries)
         return False, True
 
-    def _enqueue(self, name: str, coro_factory, reason: str) -> SendStatus:
-        if len(self._outbox) >= OUTBOX_MAX_ITEMS:
-            oldest = self._outbox.popleft()
-            log.error("Outbox full (%d items): dropped %s", OUTBOX_MAX_ITEMS, oldest.name)
-        self._outbox.append(_Pending(name, coro_factory))
-        log.warning("Queued %s for retry (%s); outbox=%d", name, reason, len(self._outbox))
+    def _name_for(self, base: str, rcpt: _Recipient) -> str:
+        return base if len(self._recipients) == 1 else f"{base} → {rcpt.chat_id}"
+
+    def _enqueue(self, rcpt: _Recipient, name: str, coro_factory, reason: str) -> SendStatus:
+        if len(rcpt.outbox) >= OUTBOX_MAX_ITEMS:
+            oldest = rcpt.outbox.popleft()
+            log.error("Outbox for %s full (%d items): dropped %s", rcpt.chat_id, OUTBOX_MAX_ITEMS, oldest.name)
+        rcpt.outbox.append(_Pending(name, coro_factory))
+        log.warning("Queued %s for retry (%s); outbox=%d", name, reason, len(rcpt.outbox))
         return SendStatus.QUEUED
 
-    async def _dispatch(self, name: str, coro_factory) -> SendStatus:
-        async with self._lock:
-            if self._outbox:
-                # Older messages are still undelivered — queue this one to keep the order.
-                return self._enqueue(name, coro_factory, "outbox not empty")
+    async def _dispatch_one(self, rcpt: _Recipient, name: str, coro_factory) -> SendStatus:
+        async with rcpt.lock:
+            if rcpt.outbox:
+                # Older messages to this chat are still undelivered — queue to keep the order.
+                return self._enqueue(rcpt, name, coro_factory, "outbox not empty")
             delivered, queueable = await self._send_now(name, coro_factory)
             if delivered:
                 return SendStatus.OK
             if not queueable:
                 return SendStatus.DROPPED
-            return self._enqueue(name, coro_factory, "delivery failed")
+            return self._enqueue(rcpt, name, coro_factory, "delivery failed")
+
+    async def _dispatch(self, base_name: str, make_coro: Callable[[str], Awaitable]) -> SendStatus:
+        """Send to every recipient. Each has its own queue, so one broken chat cannot stall the rest."""
+        statuses = await asyncio.gather(*(
+            self._dispatch_one(r, self._name_for(base_name, r), lambda r=r: make_coro(r.chat_id))
+            for r in self._recipients
+        ))
+        return SendStatus.worst(*statuses)
 
     async def _flush_loop(self) -> None:
         while True:
@@ -211,27 +240,30 @@ class TelegramSender:
                 log.exception("Outbox flush failed")
 
     async def flush_outbox(self) -> None:
-        """Deliver queued messages, oldest first, stopping at the first failure."""
-        if not self._outbox:
+        """Deliver queued messages, oldest first, stopping at the first failure per recipient."""
+        await asyncio.gather(*(self._flush_recipient(r) for r in self._recipients))
+
+    async def _flush_recipient(self, rcpt: _Recipient) -> None:
+        if not rcpt.outbox:
             return
-        async with self._lock:
-            while self._outbox:
-                item = self._outbox[0]
+        async with rcpt.lock:
+            while rcpt.outbox:
+                item = rcpt.outbox[0]
                 age = time.monotonic() - item.created
                 if age > OUTBOX_TTL_SEC:
-                    self._outbox.popleft()
+                    rcpt.outbox.popleft()
                     log.error("Outbox: %s expired after %.1fh — LOST", item.name, age / 3600)
                     continue
                 delivered, retryable = await self._attempt(item.name, item.factory)
                 if delivered:
-                    self._outbox.popleft()
-                    log.info("Outbox: delivered %s after %.0fs; %d left", item.name, age, len(self._outbox))
+                    rcpt.outbox.popleft()
+                    log.info("Outbox: delivered %s after %.0fs; %d left", item.name, age, len(rcpt.outbox))
                     continue
                 if not retryable:
-                    self._outbox.popleft()
+                    rcpt.outbox.popleft()
                     log.error("Outbox: %s rejected by Telegram — LOST", item.name)
                     continue
-                log.info("Outbox: still undeliverable, %d message(s) pending", len(self._outbox))
+                log.info("Outbox: %s still undeliverable, %d message(s) pending", rcpt.chat_id, len(rcpt.outbox))
                 return
 
     # ------------------------------------------------------------------
@@ -247,8 +279,8 @@ class TelegramSender:
 
         return await self._dispatch(
             _label("text", text),
-            lambda: self._bot.send_message(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_message(
+                chat_id=chat_id,
                 text=text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
@@ -259,8 +291,8 @@ class TelegramSender:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("photo", caption),
-            lambda: self._bot.send_photo(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_photo(
+                chat_id=chat_id,
                 photo=InputFile(io.BytesIO(data), filename=filename),
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
@@ -272,8 +304,8 @@ class TelegramSender:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("document", filename),
-            lambda: self._bot.send_document(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_document(
+                chat_id=chat_id,
                 document=InputFile(io.BytesIO(data), filename=filename),
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
@@ -285,8 +317,8 @@ class TelegramSender:
         caption = self._truncate_caption(caption)
         return await self._dispatch(
             _label("video", filename),
-            lambda: self._bot.send_video(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_video(
+                chat_id=chat_id,
                 video=InputFile(io.BytesIO(data), filename=filename),
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
@@ -296,36 +328,46 @@ class TelegramSender:
 
     async def send_voice(self, data: bytes, caption: str = "", reply_markup=None) -> SendStatus:
         caption = self._truncate_caption(caption)
-        status = await self._dispatch(
-            _label("voice", caption),
-            lambda: self._bot.send_voice(
-                chat_id=self._chat_id,
+        voice_name = _label("voice", caption)
+        audio_name = _label("audio", caption)
+
+        def voice(chat_id):
+            return self._bot.send_voice(
+                chat_id=chat_id,
                 voice=InputFile(io.BytesIO(data), filename="voice.ogg"),
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
-        )
-        if status is not SendStatus.DROPPED:
-            # OK, or queued on a network failure — resending as audio would duplicate it.
-            return status
-        log.info("send_voice rejected, falling back to send_audio")
-        return await self._dispatch(
-            _label("audio", caption),
-            lambda: self._bot.send_audio(
-                chat_id=self._chat_id,
+
+        def audio(chat_id):
+            return self._bot.send_audio(
+                chat_id=chat_id,
                 audio=InputFile(io.BytesIO(data), filename="audio.m4a"),
                 caption=caption or None,
                 parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
-        )
+
+        async def deliver(rcpt: _Recipient) -> SendStatus:
+            status = await self._dispatch_one(
+                rcpt, self._name_for(voice_name, rcpt), lambda: voice(rcpt.chat_id)
+            )
+            if status is not SendStatus.DROPPED:
+                # OK, or queued on a network failure — resending as audio would duplicate it.
+                return status
+            log.info("send_voice rejected for %s, falling back to send_audio", rcpt.chat_id)
+            return await self._dispatch_one(
+                rcpt, self._name_for(audio_name, rcpt), lambda: audio(rcpt.chat_id)
+            )
+
+        return SendStatus.worst(*await asyncio.gather(*(deliver(r) for r in self._recipients)))
 
     async def send_sticker(self, data: bytes, reply_markup=None) -> SendStatus:
         return await self._dispatch(
             "sticker",
-            lambda: self._bot.send_sticker(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_sticker(
+                chat_id=chat_id,
                 sticker=InputFile(io.BytesIO(data), filename="sticker.webp"),
                 reply_markup=reply_markup,
             )
@@ -340,8 +382,8 @@ class TelegramSender:
         ]
         return await self._dispatch(
             _label("poll", question),
-            lambda: self._bot.send_poll(
-                chat_id=self._chat_id,
+            lambda chat_id: self._bot.send_poll(
+                chat_id=chat_id,
                 question=question,
                 options=options,
                 question_parse_mode=ParseMode.HTML,

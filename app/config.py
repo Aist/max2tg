@@ -19,6 +19,11 @@ class Settings:
     debug: bool = False
     reply_enabled: bool = False
 
+    @property
+    def tg_chat_ids(self) -> list[str]:
+        """TG_CHAT_ID may list several chats, comma-separated — each gets every message."""
+        return [c.strip() for c in self.tg_chat_id.split(",") if c.strip()]
+
 
 def load_settings() -> Settings:
     load_dotenv()
@@ -32,12 +37,16 @@ def load_settings() -> Settings:
         )
 
     tg_chat_id = os.environ["TG_CHAT_ID"]
-    try:
-        int(tg_chat_id)
-    except ValueError:
-        raise SystemExit(
-            f"TG_CHAT_ID must be a valid integer, got: {tg_chat_id!r}"
-        )
+    chat_ids = [c.strip() for c in tg_chat_id.split(",") if c.strip()]
+    if not chat_ids:
+        raise SystemExit("TG_CHAT_ID must contain at least one chat id")
+    for cid in chat_ids:
+        try:
+            int(cid)
+        except ValueError:
+            raise SystemExit(
+                f"TG_CHAT_ID must be a comma-separated list of integers, got: {cid!r}"
+            )
 
     return Settings(
         max_token=os.environ["MAX_TOKEN"],

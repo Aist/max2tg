@@ -1,28 +1,32 @@
 """Tests for app/tg_sender.py — poll formatting and delivery/outbox behaviour."""
 
-import asyncio
-from collections import deque
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from telegram.constants import PollLimit
 from telegram.error import BadRequest, TimedOut
 
-from app.tg_sender import OUTBOX_MAX_ITEMS, SendStatus, TelegramSender
+from app.tg_sender import OUTBOX_MAX_ITEMS, SendStatus, TelegramSender, _Recipient
 
 
-def _make_sender(max_retries: int = 1) -> TelegramSender:
+def _make_sender(max_retries: int = 1, chat_ids: tuple[str, ...] = ("123",)) -> TelegramSender:
     """Build a sender with a mocked Bot and no background flusher."""
     sender = TelegramSender.__new__(TelegramSender)
     sender._bot = MagicMock()
     sender._bot.send_poll = AsyncMock()
     sender._bot.send_message = AsyncMock()
-    sender._chat_id = "123"
+    sender._recipients = [_Recipient(c) for c in chat_ids]
     sender._max_retries = max_retries
-    sender._outbox = deque()
-    sender._lock = asyncio.Lock()
     sender._flusher = None
     return sender
+
+
+def _sent_to(sender: TelegramSender, chat_id: str) -> list[str]:
+    return [
+        call.kwargs["text"]
+        for call in sender._bot.send_message.await_args_list
+        if call.kwargs["chat_id"] == chat_id
+    ]
 
 
 class TestSendPoll:
@@ -79,6 +83,24 @@ class TestSendStatus:
         assert SendStatus.worst(SendStatus.OK, SendStatus.OK) is SendStatus.OK
         assert SendStatus.worst(SendStatus.OK, SendStatus.QUEUED) is SendStatus.QUEUED
         assert SendStatus.worst(SendStatus.QUEUED, SendStatus.DROPPED) is SendStatus.DROPPED
+
+
+class TestRecipients:
+    def test_single_chat_id_accepts_a_bare_string(self):
+        sender = TelegramSender("123456:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKKLLL", "42")
+        assert sender.chat_ids == ["42"]
+
+    def test_chat_ids_are_trimmed_and_blank_entries_dropped(self):
+        sender = TelegramSender("123456:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKKLLL", [" 42 ", "", "-100"])
+        assert sender.chat_ids == ["42", "-100"]
+
+    def test_comma_separated_string_is_split(self):
+        sender = TelegramSender("123456:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKKLLL", "111, 222 ,333")
+        assert sender.chat_ids == ["111", "222", "333"]
+
+    def test_empty_recipient_list_is_rejected(self):
+        with pytest.raises(ValueError):
+            TelegramSender("123456:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKKLLL", [])
 
 
 class TestDelivery:
@@ -147,8 +169,7 @@ class TestDelivery:
         await sender.flush_outbox()
 
         assert sender.outbox_size == 0
-        sent = [call.kwargs["text"] for call in sender._bot.send_message.await_args_list]
-        assert sent == ["first", "second"]
+        assert _sent_to(sender, "123") == ["first", "second"]
 
     @pytest.mark.asyncio
     async def test_flush_stops_at_first_still_failing_message(self):
@@ -181,3 +202,63 @@ class TestDelivery:
             await sender.send(f"msg{i}")
 
         assert sender.outbox_size == OUTBOX_MAX_ITEMS
+
+
+class TestFanOut:
+    """Every recipient gets every message, and a broken chat must not stall the others."""
+
+    @pytest.mark.asyncio
+    async def test_message_goes_to_every_recipient(self):
+        sender = _make_sender(chat_ids=("123", "456"))
+
+        status = await sender.send("hello")
+
+        assert status is SendStatus.OK
+        assert _sent_to(sender, "123") == ["hello"]
+        assert _sent_to(sender, "456") == ["hello"]
+
+    @pytest.mark.asyncio
+    async def test_a_failing_recipient_does_not_block_the_others(self):
+        sender = _make_sender(chat_ids=("123", "456"))
+
+        async def fail_for_456(**kwargs):
+            if kwargs["chat_id"] == "456":
+                raise TimedOut()
+
+        sender._bot.send_message = AsyncMock(side_effect=fail_for_456)
+        await sender.send("first")
+        await sender.send("second")
+
+        # 456 is backed up, but 123 keeps receiving immediately.
+        assert _sent_to(sender, "123") == ["first", "second"]
+        assert len(sender._recipients[0].outbox) == 0
+        assert len(sender._recipients[1].outbox) == 2
+
+    @pytest.mark.asyncio
+    async def test_status_reports_the_worst_recipient(self):
+        sender = _make_sender(chat_ids=("123", "456"))
+
+        async def fail_for_456(**kwargs):
+            if kwargs["chat_id"] == "456":
+                raise TimedOut()
+
+        sender._bot.send_message = AsyncMock(side_effect=fail_for_456)
+
+        assert await sender.send("hello") is SendStatus.QUEUED
+
+    @pytest.mark.asyncio
+    async def test_each_recipient_is_flushed_independently(self):
+        sender = _make_sender(chat_ids=("123", "456"))
+        sender._bot.send_message = AsyncMock(side_effect=TimedOut())
+        await sender.send("first")
+        assert sender.outbox_size == 2
+
+        async def fail_for_456(**kwargs):
+            if kwargs["chat_id"] == "456":
+                raise TimedOut()
+
+        sender._bot.send_message = AsyncMock(side_effect=fail_for_456)
+        await sender.flush_outbox()
+
+        assert len(sender._recipients[0].outbox) == 0
+        assert len(sender._recipients[1].outbox) == 1

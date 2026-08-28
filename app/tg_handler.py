@@ -1,5 +1,6 @@
 import html
 import logging
+from typing import Sequence
 
 from telegram import Update
 from telegram.ext import (
@@ -19,17 +20,16 @@ log = logging.getLogger(__name__)
 PENDING_REPLY_KEY = "pending_reply_chat_id"
 PENDING_REPLY_LABEL_KEY = "pending_reply_label"
 
-_ALLOWED_CHAT_ID_KEY = "allowed_chat_id"
+_ALLOWED_CHAT_IDS_KEY = "allowed_chat_ids"
 
 
 async def _on_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline 'Reply' button press."""
     query = update.callback_query
 
-    allowed_chat_id = context.bot_data.get(_ALLOWED_CHAT_ID_KEY)
-    if allowed_chat_id is not None and (
-        update.effective_chat.id != allowed_chat_id
-        and update.effective_user.id != allowed_chat_id
+    allowed = context.bot_data.get(_ALLOWED_CHAT_IDS_KEY)
+    if allowed and not (
+        update.effective_chat.id in allowed or update.effective_user.id in allowed
     ):
         await query.answer()
         return
@@ -106,7 +106,7 @@ async def _on_text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("⚠️ Ошибка при отправке в Max.", disable_notification=True)
 
 
-def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str,
+def build_tg_app(token: str, max_client: MaxClient, allowed_chat_ids: str | Sequence[str],
                   proxy_url: str | None = None, read_timeout: int | None = None, write_timeout: int | None = None) -> Application:
     """Build and configure the Telegram Application with handlers."""
     builder = Application.builder().token(token)
@@ -117,10 +117,12 @@ def build_tg_app(token: str, max_client: MaxClient, allowed_chat_id: str,
     if write_timeout:
         builder = builder.write_timeout(write_timeout)
     app = builder.build()
+    raw_ids = [allowed_chat_ids] if isinstance(allowed_chat_ids, str) else list(allowed_chat_ids)
+    ids = [int(c) for c in raw_ids]
     app.bot_data["max_client"] = max_client
-    app.bot_data[_ALLOWED_CHAT_ID_KEY] = int(allowed_chat_id)
+    app.bot_data[_ALLOWED_CHAT_IDS_KEY] = set(ids)
 
-    chat_filter = filters.Chat(chat_id=int(allowed_chat_id))
+    chat_filter = filters.Chat(chat_id=ids)
 
     app.add_handler(CallbackQueryHandler(_on_reply_button, pattern=r"^reply:"))
     app.add_handler(CommandHandler("cancel", _on_cancel, filters=chat_filter))

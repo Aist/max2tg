@@ -72,7 +72,7 @@ async def main():
 
     sender = TelegramSender(
         settings.tg_bot_token,
-        settings.tg_chat_id,
+        settings.tg_chat_ids,
         proxy_url=settings.tg_proxy,
         read_timeout=settings.tg_read_timeout,
         write_timeout=settings.tg_write_timeout,
@@ -88,7 +88,7 @@ async def main():
 
     tg_app = None
     if settings.reply_enabled:
-        tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_id,
+        tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_ids,
                               proxy_url=settings.tg_proxy, read_timeout=settings.tg_read_timeout, write_timeout=settings.tg_write_timeout)
         await tg_app.initialize()
         await tg_app.start()

@@ -65,7 +65,7 @@ class TestOnReplyButton:
     async def test_stores_pending_reply_chat_id(self):
         query = _make_callback_query("reply:42")
         update = _make_update_with_query(query)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
@@ -75,7 +75,7 @@ class TestOnReplyButton:
     async def test_stores_label_from_first_line(self):
         query = _make_callback_query("reply:42", message_text="First line\nSecond line")
         update = _make_update_with_query(query)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
@@ -85,7 +85,7 @@ class TestOnReplyButton:
     async def test_ignores_non_reply_callback(self):
         query = _make_callback_query("something_else")
         update = _make_update_with_query(query)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
@@ -95,7 +95,7 @@ class TestOnReplyButton:
     async def test_ignores_unauthorized_chat(self):
         query = _make_callback_query("reply:42")
         update = _make_update_with_query(query, chat_id=9999)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
@@ -105,7 +105,7 @@ class TestOnReplyButton:
     async def test_chat_id_fallback_to_string_if_not_int(self):
         query = _make_callback_query("reply:notanint")
         update = _make_update_with_query(query)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
@@ -115,7 +115,7 @@ class TestOnReplyButton:
     async def test_prompts_user_to_write_reply(self):
         query = _make_callback_query("reply:42", message_text="Hello")
         update = _make_update_with_query(query)
-        ctx = _make_context(bot_data={"allowed_chat_id": -100})
+        ctx = _make_context(bot_data={"allowed_chat_ids": {-100}})
 
         await _on_reply_button(update, ctx)
 
