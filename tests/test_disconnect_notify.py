@@ -27,7 +27,7 @@ class TestDisconnectThrottle:
     async def test_first_disconnect_sends_immediately(self):
         client, sender = _make_client()
         await client._on_disconnect_cb()
-        sender.send.assert_called_once()
+        sender.send_status.assert_called_once()
 
     async def test_second_disconnect_suppressed_within_1_hour(self):
         client, sender = _make_client()
@@ -40,10 +40,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t1
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_not_called()
+        sender.send_status.assert_not_called()
 
     async def test_second_disconnect_sends_after_1_hour(self):
         client, sender = _make_client()
@@ -56,10 +56,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t1
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_called_once()
+        sender.send_status.assert_called_once()
 
     async def test_third_disconnect_suppressed_within_3_hours(self):
         client, sender = _make_client()
@@ -76,10 +76,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t2
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_not_called()
+        sender.send_status.assert_not_called()
 
     async def test_third_disconnect_sends_after_3_hours(self):
         client, sender = _make_client()
@@ -96,10 +96,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t2
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_called_once()
+        sender.send_status.assert_called_once()
 
     async def test_fourth_disconnect_suppressed_within_24_hours(self):
         client, sender = _make_client()
@@ -118,10 +118,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t3
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_not_called()
+        sender.send_status.assert_not_called()
 
     async def test_fourth_disconnect_sends_after_24_hours(self):
         client, sender = _make_client()
@@ -140,10 +140,10 @@ class TestDisconnectThrottle:
             await client._on_disconnect_cb()
 
             mock_dt.now.return_value = t3
-            sender.send.reset_mock()
+            sender.send_status.reset_mock()
             await client._on_disconnect_cb()
 
-        sender.send.assert_called_once()
+        sender.send_status.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +166,7 @@ class TestReconnectNotification:
         await client._on_ready_cb(snapshot)
 
         # Starting up is not news — only losing and regaining the connection is.
+        sender.send_status.assert_not_called()
         sender.send.assert_not_called()
 
     async def test_notification_sent_on_reconnect(self):
@@ -174,7 +175,7 @@ class TestReconnectNotification:
         # First connect
         await client._on_ready_cb(snapshot)
         # Reconnect
-        sender.send.reset_mock()
+        sender.send_status.reset_mock()
         await client._on_ready_cb(snapshot)
-        sender.send.assert_called_once()
-        assert "восстановлено" in sender.send.call_args[0][0]
+        sender.send_status.assert_called_once()
+        assert "восстановлено" in sender.send_status.call_args[0][0]

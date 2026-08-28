@@ -203,6 +203,18 @@ class TelegramSender:
         log.warning("Telegram: %s failed after %d attempts", name, self._max_retries)
         return False, True
 
+    @property
+    def _status_recipients(self) -> list[_Recipient]:
+        """Who hears about the bot itself.
+
+        Telegram gives groups, supergroups and channels negative ids, private chats
+        positive ones. Connection notices are operator noise in a group, so they go to
+        people only — unless every recipient is a group, in which case staying silent
+        would hide an expired token entirely.
+        """
+        private = [r for r in self._recipients if not r.chat_id.startswith("-")]
+        return private or self._recipients
+
     def _recipients_for(self, source: str | None) -> list[_Recipient]:
         """Recipients subscribed to this Max chat. A None source means everyone — status notices."""
         if source is None:
@@ -238,9 +250,10 @@ class TelegramSender:
             return self._enqueue(rcpt, name, coro_factory, "delivery failed")
 
     async def _dispatch(self, base_name: str, make_coro: Callable[[str], Awaitable],
-                        source: str | None = None) -> SendStatus:
+                        source: str | None = None,
+                        recipients: list[_Recipient] | None = None) -> SendStatus:
         """Send to every subscribed recipient. Each has its own queue, so one broken chat cannot stall the rest."""
-        recipients = self._recipients_for(source)
+        recipients = recipients if recipients is not None else self._recipients_for(source)
         if not recipients:
             log.debug("No recipient subscribed to Max chat %s — skipping %s", source, base_name)
             return SendStatus.OK
@@ -307,6 +320,20 @@ class TelegramSender:
                 reply_markup=reply_markup,
             ),
             source=source,
+        )
+
+    async def send_status(self, text: str) -> SendStatus:
+        """Announce something about the bot — connection lost, restored, auth failed."""
+        if not text:
+            return SendStatus.OK
+        return await self._dispatch(
+            _label("status", text),
+            lambda chat_id: self._bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+            ),
+            recipients=self._status_recipients,
         )
 
     async def send_photo(self, data: bytes, caption: str = "", filename: str = "photo.jpg", reply_markup=None, source: str | None = None) -> SendStatus:

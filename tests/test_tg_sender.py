@@ -336,3 +336,42 @@ class TestRouting:
         )
         assert sender._recipients[0].sources is None
         assert sender._recipients[1].sources == frozenset({"-758"})
+
+
+class TestStatusNotices:
+    """Connection notices are operator noise in a group — people get them, groups do not."""
+
+    @pytest.mark.asyncio
+    async def test_groups_are_skipped(self):
+        sender = _make_sender(chat_ids=("111", "-333"))
+
+        await sender.send_status("connection lost")
+
+        assert _sent_to(sender, "111") == ["connection lost"]
+        assert _sent_to(sender, "-333") == []
+
+    @pytest.mark.asyncio
+    async def test_content_still_reaches_groups(self):
+        sender = _make_sender(chat_ids=("111", "-333"))
+
+        await sender.send("a forwarded message")
+
+        assert _sent_to(sender, "-333") == ["a forwarded message"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_groups_when_there_is_nobody_else(self):
+        # Silence would hide an expired token completely.
+        sender = _make_sender(chat_ids=("-333",))
+
+        await sender.send_status("auth failed")
+
+        assert _sent_to(sender, "-333") == ["auth failed"]
+
+    @pytest.mark.asyncio
+    async def test_status_ignores_routing(self):
+        sender = _make_sender(chat_ids=("111", "222"))
+        sender._recipients[1].sources = frozenset({"-758"})
+
+        await sender.send_status("connection restored")
+
+        assert _sent_to(sender, "222") == ["connection restored"]

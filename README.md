@@ -62,7 +62,7 @@
    TG_ROUTES=-1001234567890:-758
    ```
    Здесь `111` получает оба чата, а группа `-1001234567890` — только `-758`. Маршрут, который не может сработать (получателя нет в `TG_CHAT_ID`, либо чат Max не пересылается вовсе), считается опечаткой: бот откажется стартовать и скажет, что не так.
-   Служебные уведомления о связи с Max маршрутизацию игнорируют и приходят всем.
+   Служебные уведомления о связи с Max («соединение потеряно/восстановлено», «ошибка авторизации») маршрутизацию игнорируют, но приходят **только в личные чаты** — в группах это лишний шум для людей, которым нужен один контент. Telegram выдаёт группам, супергруппам и каналам отрицательные ID, личным чатам — положительные, по этому признаку они и различаются. Если все получатели окажутся группами, уведомления пойдут и туда: молчание скрыло бы протухший токен.
    Каждый новый человек должен сначала сам написать боту `/start`, иначе Telegram запретит боту первым начинать диалог
 4. **Важно:** напишите вашему боту `/start`, чтобы он мог вам отправлять сообщения
 
@@ -363,7 +363,7 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
    TG_ROUTES=-1001234567890:-758
    ```
    Here `111` receives both chats while the group `-1001234567890` receives only `-758`. A route that can never match (the recipient is missing from `TG_CHAT_ID`, or the Max chat is not forwarded at all) is treated as a typo: the bot refuses to start and says what is wrong.
-   Connection status notices ignore routing and reach everyone.
+   Connection notices ("connection lost/restored", "authorization failed") ignore routing but reach **private chats only** — in a group they are noise for people who only want the content. Telegram gives groups, supergroups and channels negative ids and private chats positive ones, which is how they are told apart. If every recipient is a group, the notices go there anyway: staying silent would hide an expired token.
    Each new person must send the bot a `/start` first — Telegram forbids bots from opening a conversation
 4. **Important:** send `/start` to your bot so it can message you
 

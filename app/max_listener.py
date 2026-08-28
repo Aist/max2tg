@@ -290,7 +290,7 @@ def create_max_client(
             log.info("Known users: %s", resolver.users)
 
         if not _first_connect:
-            await sender.send("✅ <b>Max:</b> соединение восстановлено")
+            await sender.send_status("✅ <b>Max:</b> соединение восстановлено")
             # Re-read everything sent while we were away. The window covers the whole gap,
             # not just the reconnect delay; duplicates are filtered by id in MaxClient.
             now = time.time()
@@ -322,7 +322,7 @@ def create_max_client(
             return
         _notif_count += 1
         _last_notif_time = datetime.now()
-        await sender.send("⚠️ <b>Max:</b> соединение потеряно, переподключение...")
+        await sender.send_status("⚠️ <b>Max:</b> соединение потеряно, переподключение...")
 
     @client.on_auth_error
     async def handle_auth_error(payload: dict):
@@ -333,7 +333,7 @@ def create_max_client(
             return
         _last_auth_alert = now
         reason = payload.get("error") or payload.get("message") if isinstance(payload, dict) else None
-        await sender.send(
+        await sender.send_status(
             "⛔️ <b>Max:</b> ошибка авторизации — обновите <code>MAX_TOKEN</code>"
             + (f"\n<i>{escape(str(reason))}</i>" if reason else "")
         )
