@@ -354,3 +354,11 @@ class TestCreateMaxClientProxy:
     def test_proxy_url_defaults_to_none(self):
         client = create_max_client("tok", "dev", sender=MagicMock())
         assert client.proxy_url is None
+
+    def test_exclude_chat_ids_passed_to_max_client(self):
+        client = create_max_client("tok", "dev", sender=MagicMock(), exclude_chat_ids="1,2")
+        assert client.exclude_chat_ids == [1, 2]
+
+    def test_exclude_chat_ids_defaults_to_empty(self):
+        client = create_max_client("tok", "dev", sender=MagicMock())
+        assert client.exclude_chat_ids == []

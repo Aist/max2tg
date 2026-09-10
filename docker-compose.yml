@@ -8,6 +8,7 @@ services:
       MAX_TOKEN:
       MAX_DEVICE_ID:
       MAX_CHAT_IDS:
+      MAX_EXCLUDE_CHAT_IDS:
       MAX_PROXY:
       TG_BOT_TOKEN:
       TG_CHAT_ID:
