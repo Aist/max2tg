@@ -1,5 +1,7 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
+import asyncio
+
 import pytest
 from unittest.mock import patch
 
@@ -292,6 +294,66 @@ class TestMaxClientInit:
     def test_proxy_url_stored(self):
         c = MaxClient(token="tok", device_id="dev", proxy_url="socks5://127.0.0.1:1080")
         assert c.proxy_url == "socks5://127.0.0.1:1080"
+
+    def test_exclude_chat_ids_default_empty(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c.exclude_chat_ids == []
+
+    def test_exclude_chat_ids_parsed(self):
+        c = MaxClient(token="tok", device_id="dev", exclude_chat_ids="-789,-012")
+        assert c.exclude_chat_ids == [-789, -12]
+
+    def test_exclude_chat_ids_are_not_shared_between_instances(self):
+        c1 = MaxClient(token="tok", device_id="dev", exclude_chat_ids="1,2")
+        c2 = MaxClient(token="tok", device_id="dev")
+        assert c1.exclude_chat_ids == [1, 2]
+        assert c2.exclude_chat_ids == []
+
+
+# ---------------------------------------------------------------------------
+# MaxClient.process_message — chat_ids / exclude_chat_ids filtering
+# ---------------------------------------------------------------------------
+
+def _payload(chat_id, message_id="1"):
+    return {"chatId": chat_id, "message": {"id": message_id, "text": "hi"}}
+
+
+class TestProcessMessageFiltering:
+    async def _received(self, client: MaxClient, *payloads) -> list:
+        received = []
+
+        @client.on_message
+        async def handler(msg):
+            received.append(msg)
+
+        for payload in payloads:
+            client.process_message(payload)
+        await asyncio.sleep(0)
+        return received
+
+    @pytest.mark.asyncio
+    async def test_excluded_chat_is_skipped(self):
+        client = MaxClient(token="tok", device_id="dev", exclude_chat_ids="42")
+        received = await self._received(client, _payload(42))
+        assert received == []
+
+    @pytest.mark.asyncio
+    async def test_non_excluded_chat_is_delivered(self):
+        client = MaxClient(token="tok", device_id="dev", exclude_chat_ids="42")
+        received = await self._received(client, _payload(99))
+        assert [m.chat_id for m in received] == [99]
+
+    @pytest.mark.asyncio
+    async def test_exclude_wins_over_chat_ids_allowlist(self):
+        client = MaxClient(token="tok", device_id="dev", chat_ids="42,99", exclude_chat_ids="42")
+        received = await self._received(client, _payload(42), _payload(99))
+        assert [m.chat_id for m in received] == [99]
+
+    @pytest.mark.asyncio
+    async def test_no_exclude_list_forwards_everything(self):
+        client = MaxClient(token="tok", device_id="dev")
+        received = await self._received(client, _payload(1), _payload(2))
+        assert [m.chat_id for m in received] == [1, 2]
 
 
 class TestMakeConnector:
