@@ -84,6 +84,16 @@ cp .env.example .env
 | `TG_MEDIA_WRITE_TIMEOUT` | нет | Таймаут загрузки медиафайлов в Telegram, в секундах. Увеличьте, если файлы отправляются повторно из-за медленного прокси |
 | `TG_BASE_URL`   | нет          | Адрес своего сервера Telegram Bot API вместо `api.telegram.org` (например `http://localhost:8081`), полезно вместе с telegram-bot-api  |
 
+### Как узнать ID чата Max (для `MAX_CHAT_IDS` / `MAX_EXCLUDE_CHAT_IDS`)
+
+Запустите бота (можно без `MAX_CHAT_IDS`/`MAX_EXCLUDE_CHAT_IDS` — тогда пересылается всё) и посмотрите в логах при подключении строку:
+
+```
+Known chats: {100: 'Dev Team', 99: 'DM:55', -758: 'Новости'}
+```
+
+Это словарь `{ID чата: название}` для всех чатов аккаунта — найдите нужное название и возьмите его числовой ключ. Если чат новый и в этот список не попал, дождитесь сообщения из него и посмотрите строку `New message: chat=<ID> ...` в логе.
+
 ## Запуск
 
 ### Docker (рекомендуется для сервера)
@@ -350,6 +360,16 @@ cp .env.example .env
 | `TG_WRITE_TIMEOUT` | no | HTTP write timeout for regular Telegram requests, in seconds |
 | `TG_MEDIA_WRITE_TIMEOUT` | no | Upload timeout for media files to Telegram, in seconds. Increase if files are sent multiple times due to a slow proxy |
 | `TG_BASE_URL` | no | Your own Telegram Bot API server address instead of `api.telegram.org` (e.g. `http://localhost:8081`), useful together with telegram-bot-api  |
+
+### Finding a Max chat ID (for `MAX_CHAT_IDS` / `MAX_EXCLUDE_CHAT_IDS`)
+
+Start the bot (without `MAX_CHAT_IDS`/`MAX_EXCLUDE_CHAT_IDS` it forwards everything) and look for this line in the logs on connect:
+
+```
+Known chats: {100: 'Dev Team', 99: 'DM:55', -758: 'News'}
+```
+
+It's a `{chat ID: name}` dict of every chat on the account - find the name you need and take its numeric key. If the chat is new and wasn't in that list yet, wait for a message from it and check the `New message: chat=<ID> ...` log line.
 
 ## Running
 
