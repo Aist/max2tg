@@ -74,8 +74,10 @@ class OpCode(IntEnum):
     SEND_MESSAGE = 64
     EDIT_MESSAGE = 67
     GET_VIDEO_URL = 83
+    FILE_UPLOAD = 87
     GET_FILE_URL = 88
     DISPATCH = 128
+    NOTIF_ATTACH = 136
 
 
 @dataclass
@@ -96,6 +98,9 @@ class MaxClient:
     WS_URL = "wss://ws-api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
+    # An uploaded file is not attachable until the server reports it processed
+    # (NOTIF_ATTACH). Sending earlier fails with "attachment.not.ready".
+    ATTACH_READY_TIMEOUT_SEC = 60
 
     def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False,
                  proxy_url: str | None = None, exclude_chat_ids: str | None = None):
@@ -112,6 +117,8 @@ class MaxClient:
         self._session: aiohttp.ClientSession | None = None
         self._dispatch_counter = 0
         self._pending: dict[int, asyncio.Future] = {}
+        # fileId (as str) → future resolved when NOTIF_ATTACH says it is processed
+        self._attach_waiters: dict[str, asyncio.Future] = {}
         self._on_disconnect_cb = None
         self.chat_ids: list[int] = []
         if chat_ids:
@@ -241,6 +248,12 @@ class MaxClient:
                         if not fut.done():
                             fut.cancel()
                     self._pending.clear()
+                    # Nobody will deliver NOTIF_ATTACH on a dead socket — release
+                    # uploads instead of leaving them to time out.
+                    for fut in self._attach_waiters.values():
+                        if not fut.done():
+                            fut.cancel()
+                    self._attach_waiters.clear()
 
                 if self._on_disconnect_cb:
                     try:
@@ -312,8 +325,18 @@ class MaxClient:
             elif op in (OpCode.HEARTBEAT_PING,):
                 log.debug("Heartbeat op=%s", op)
 
+            elif op == OpCode.NOTIF_ATTACH:
+                self._resolve_attach_waiter(payload.get("fileId"))
+
             elif cmd not in (1, 3):
                 log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview[:500]))
+
+    def _resolve_attach_waiter(self, file_id) -> None:
+        """Mark an uploaded file as processed, releasing whoever waits to attach it."""
+        log.info("Attachment ready: fileId=%s", file_id)
+        fut = self._attach_waiters.get(str(file_id))
+        if fut is not None and not fut.done():
+            fut.set_result(True)
 
     def process_message(self, payload):
         if self._on_message_cb:
@@ -337,21 +360,107 @@ class MaxClient:
         log.info("fetch_contacts(%s) → keys: %s", contact_ids, list(resp.keys()))
         return resp
 
-    async def send_message(self, chat_id, text: str, elements=None) -> dict:
-        """Send a text message to a Max chat. Returns the server response."""
+    async def send_message(self, chat_id, text: str, elements=None, attaches=None) -> dict:
+        """Send a message to a Max chat. Returns the server response.
+
+        attaches: list of attach dicts as returned by upload_file().
+        """
         if elements is None:
             elements = []
         cid = int(time.time() * 1000) * 1000 + random.randint(0, 999)
+        message: dict[str, Any] = {"text": text, "cid": cid, "elements": elements}
+        if attaches:
+            message["attaches"] = attaches
         resp = await self.cmd(
             OpCode.SEND_MESSAGE,
             {
                 "chatId": chat_id,
-                "message": {"text": text, "cid": cid, "elements": elements},
+                "message": message,
                 "notify": True,
             },
         )
-        log.info("send_message(chat=%s) → %s", chat_id, "OK" if resp else "FAIL")
+        log.info("send_message(chat=%s, attaches=%d) → %s",
+                 chat_id, len(attaches or []), "OK" if resp else "FAIL")
         return resp
+
+    async def upload_file(self, data: bytes, filename: str) -> dict | None:
+        """Upload a file to Max and return an attach dict ready for send_message().
+
+        Three steps: ask the server for an upload slot (opcode 87), POST the bytes
+        there as multipart/form-data, then wait until the server reports the file
+        processed (NOTIF_ATTACH) — attaching it any earlier is rejected with
+        "attachment.not.ready". Returns None if any step fails.
+        """
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        resp = await self.cmd(
+            OpCode.FILE_UPLOAD,
+            {"name": filename, "size": len(data), "ext": ext, "count": 1},
+        )
+        info = (resp or {}).get("info") or []
+        if not info or not isinstance(info[0], dict):
+            log.warning("FILE_UPLOAD gave no upload info for %s: %s", filename, resp)
+            return None
+
+        slot = info[0]
+        url = slot.get("url")
+        file_id = slot.get("fileId")
+        token = slot.get("token")
+        if not (url and file_id and token):
+            log.warning("FILE_UPLOAD info incomplete for %s: %s", filename, slot)
+            return None
+
+        # Register the waiter before uploading: the notification can arrive
+        # before the POST call even returns.
+        loop = asyncio.get_running_loop()
+        ready: asyncio.Future[bool] = loop.create_future()
+        self._attach_waiters[str(file_id)] = ready
+        try:
+            if not await self._post_file(url, data, filename):
+                return None
+            try:
+                await asyncio.wait_for(ready, timeout=self.ATTACH_READY_TIMEOUT_SEC)
+            except asyncio.TimeoutError:
+                # Best effort: try attaching anyway, the server will say if it is early.
+                log.warning("No NOTIF_ATTACH for %s (fileId=%s) in %ds — attaching anyway",
+                            filename, file_id, self.ATTACH_READY_TIMEOUT_SEC)
+            except asyncio.CancelledError:
+                log.warning("Wait for attachment %s cancelled (connection lost?)", file_id)
+                return None
+        finally:
+            self._attach_waiters.pop(str(file_id), None)
+
+        return {
+            "_type": "FILE",
+            "fileId": file_id,
+            "token": token,
+            "name": slot.get("name") or filename,
+            "size": len(data),
+        }
+
+    async def _post_file(self, url: str, data: bytes, filename: str) -> bool:
+        """POST raw bytes to a Max upload URL as multipart/form-data."""
+        session = getattr(self, "_session", None)
+        close_after = False
+        if session is None or session.closed:
+            session = aiohttp.ClientSession(headers=_BROWSER_HEADERS, connector=self._make_connector())
+            close_after = True
+        try:
+            form = aiohttp.FormData()
+            form.add_field("file", data, filename=filename)
+            async with session.post(
+                url, data=form, headers=_HTTP_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=300),
+            ) as resp:
+                if resp.status == 200:
+                    log.info("Uploaded %s (%d bytes) to Max", filename, len(data))
+                    return True
+                log.warning("Upload of %s failed — HTTP %d", filename, resp.status)
+        except Exception:
+            log.exception("Upload error for %s", filename)
+        finally:
+            if close_after:
+                await session.close()
+        return False
 
     async def download_file(self, url: str, omit_origin: bool = False) -> bytes | None:
         """Download a file by URL, returning raw bytes or None on failure.

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 
 from telegram import Update
+from telegram.error import BadRequest, NetworkError
 
 from app.config import load_settings
 from app.max_listener import create_max_client
@@ -16,6 +17,22 @@ from app.tg_sender import TelegramSender
 threading.stack_size(524288)
 
 log = logging.getLogger("max2tg")
+
+
+def _log_polling_error(error: Exception) -> None:
+    """Report a polling failure.
+
+    A flaky proxy or network drop is routine - python-telegram-bot retries on its
+    own - so those get one WARNING line, with the traceback kept for DEBUG. Anything
+    else is a real bug and keeps its full trace at ERROR.
+
+    NB: BadRequest subclasses NetworkError but is never transient, hence excluded.
+    """
+    if isinstance(error, NetworkError) and not isinstance(error, BadRequest):
+        log.warning("Telegram polling error: %s: %s", type(error).__name__, error)
+        log.debug("Telegram polling error detail", exc_info=error)
+    else:
+        log.error("Telegram polling error! %s", error, exc_info=error)
 
 
 class _SyncExecutor(ThreadPoolExecutor):
@@ -103,7 +120,7 @@ async def main():
         await tg_app.updater.start_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
-            error_callback=lambda error: log.error("Telegram polling error! %s", error, exc_info=error)
+            error_callback=_log_polling_error
         )
         log.info("Telegram polling started (reply → Max enabled)")
     else:
