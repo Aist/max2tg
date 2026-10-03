@@ -9,10 +9,16 @@ docker-compose.yml
 Dockerfile
 pytest.ini
 README.md
-__pycache__
+**/__pycache__
 *.pyc
 .venv
-debug/
 tests/
-app/debug
-app/logs
+# Логи и дампы содержат переписку и подписанные ссылки на файлы - в образ
+# они попадать не должны. Паттерны матчатся от корня контекста, поэтому
+# "app/logs" не покрывает "./logs" - нужен **.
+**/logs
+**/debug
+.DS_Store
+.pytest_cache/
+.claude/
+*.code-workspace

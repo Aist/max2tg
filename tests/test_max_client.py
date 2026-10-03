@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.max_client import MaxClient, MaxMessage, OpCode
+from app.max_client import MaxClient, MaxMessage, OpCode, safe_url
 
 
 # ---------------------------------------------------------------------------
@@ -606,3 +606,44 @@ class TestAttachReadyWait:
     async def test_notification_without_waiter_is_harmless(self):
         client = MaxClient(token="tok", device_id="dev")
         await _notify(client, 123)
+
+
+# ---------------------------------------------------------------------------
+# safe_url — signed URLs must not reach the logs
+# ---------------------------------------------------------------------------
+
+class TestSafeUrl:
+    def test_drops_query_string(self):
+        url = "https://file-ms.oneme.ru/download/abc?token=SIGNED_SECRET&exp=123"
+        assert safe_url(url) == "https://file-ms.oneme.ru/download/abc?…"
+
+    def test_signed_token_is_gone(self):
+        assert "SIGNED_SECRET" not in safe_url(
+            "https://cdn.oneme.ru/f/1?sig=SIGNED_SECRET"
+        )
+
+    def test_keeps_url_without_query_intact(self):
+        url = "https://cdn.oneme.ru/video/720.mp4"
+        assert safe_url(url) == url
+
+    def test_keeps_host_and_path_for_diagnostics(self):
+        shown = safe_url("https://cdn.oneme.ru/video/720.mp4?sig=x")
+        assert "cdn.oneme.ru" in shown
+        assert "/video/720.mp4" in shown
+
+    def test_none_and_empty(self):
+        assert safe_url(None) == "None"
+        assert safe_url("") == ""
+
+    def test_non_url_string(self):
+        assert safe_url("not a url") == "<non-url>"
+
+    def test_does_not_sanitize_a_secret_in_the_path(self):
+        """Documented limitation: only the query is stripped, never the path.
+
+        A Telegram file URL carries the bot token in its path, so safe_url is no
+        protection there — such URLs must not be logged at all. Asserting the
+        current behaviour here keeps that limitation visible instead of implied.
+        """
+        shown = safe_url("https://api.telegram.org/file/bot123:SECRET/photos/f.jpg")
+        assert "SECRET" in shown
