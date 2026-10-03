@@ -7,6 +7,7 @@ from app.tg_handler import (
     PENDING_REPLY_KEY,
     PENDING_REPLY_LABEL_KEY,
     _on_cancel,
+    _on_media_reply,
     _on_reply_button,
     _on_text_reply,
     build_tg_app,
@@ -343,3 +344,191 @@ class TestBuildTgAppBaseUrl:
             build_tg_app("tok", MagicMock(), "123")
 
         token_builder.base_url.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _on_media_reply
+# ---------------------------------------------------------------------------
+
+def _make_media_update(kind: str = "photo", caption: str = "", chat_type: str = "private",
+                       user_name: str = "Alice", file_name: str | None = None,
+                       data: bytes = b"filebytes"):
+    """Telegram update carrying one attachment of the given kind."""
+    update = MagicMock()
+    update.message = MagicMock()
+    update.message.caption = caption
+    update.message.chat = MagicMock()
+    update.message.chat.type = chat_type
+    update.message.from_user = MagicMock()
+    update.message.from_user.full_name = user_name
+    update.message.reply_text = AsyncMock()
+
+    # Every media slot is empty unless this update carries that kind.
+    for slot in ("photo", "document", "video", "voice", "audio", "animation"):
+        setattr(update.message, slot, None)
+
+    tg_file = MagicMock()
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(data))
+    obj = MagicMock()
+    obj.get_file = AsyncMock(return_value=tg_file)
+    if file_name is not None:
+        obj.file_name = file_name
+
+    if kind == "photo":
+        update.message.photo = [MagicMock(), obj]  # largest resolution is last
+    else:
+        setattr(update.message, kind, obj)
+    return update
+
+
+def _make_max_client(attach=None, send_ok=True):
+    client = MagicMock()
+    client.upload_file = AsyncMock(return_value=attach if attach is not None else {
+        "_type": "FILE", "fileId": "fid", "token": "tok", "name": "photo.jpg", "size": 9,
+    })
+    client.send_message = AsyncMock(return_value={"ok": True} if send_ok else {})
+    return client
+
+
+class TestOnMediaReply:
+    @pytest.mark.asyncio
+    async def test_photo_uploaded_and_sent(self):
+        max_client = _make_max_client()
+        update = _make_media_update("photo")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42, PENDING_REPLY_LABEL_KEY: "Chat"},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        max_client.upload_file.assert_awaited_once()
+        data, filename = max_client.upload_file.await_args.args
+        assert data == b"filebytes"
+        assert filename == "photo.jpg"
+        attaches = max_client.send_message.await_args.kwargs["attaches"]
+        assert attaches[0]["fileId"] == "fid"
+
+    @pytest.mark.asyncio
+    async def test_document_uses_its_filename(self):
+        max_client = _make_max_client()
+        update = _make_media_update("document", file_name="report.pdf")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        assert max_client.upload_file.await_args.args[1] == "report.pdf"
+
+    @pytest.mark.asyncio
+    async def test_caption_is_forwarded_as_text(self):
+        max_client = _make_max_client()
+        update = _make_media_update("photo", caption="look at this")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        assert max_client.send_message.await_args.args[1] == "look at this"
+
+    @pytest.mark.asyncio
+    async def test_group_chat_prefixes_sender_name(self):
+        max_client = _make_max_client()
+        update = _make_media_update("photo", caption="hi", chat_type="group", user_name="Bob")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        text = max_client.send_message.await_args.args[1]
+        elements = max_client.send_message.await_args.args[2]
+        assert "Bob" in text
+        assert elements != []
+
+    @pytest.mark.asyncio
+    async def test_does_nothing_without_pending_reply(self):
+        """A photo sent without pressing Reply first must not crash or upload anything."""
+        max_client = _make_max_client()
+        update = _make_media_update("photo")
+        ctx = _make_context(bot_data={"max_client": max_client})
+
+        await _on_media_reply(update, ctx)
+
+        max_client.upload_file.assert_not_called()
+        max_client.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_clears_pending_state(self):
+        max_client = _make_max_client()
+        update = _make_media_update("photo")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42, PENDING_REPLY_LABEL_KEY: "Chat"},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        assert PENDING_REPLY_KEY not in ctx.user_data
+        assert PENDING_REPLY_LABEL_KEY not in ctx.user_data
+
+    @pytest.mark.asyncio
+    async def test_reports_when_max_client_missing(self):
+        update = _make_media_update("photo")
+        ctx = _make_context(user_data={PENDING_REPLY_KEY: 42}, bot_data={})
+
+        await _on_media_reply(update, ctx)
+
+        update.message.reply_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reports_failed_upload_and_skips_send(self):
+        max_client = _make_max_client(attach=None)
+        max_client.upload_file = AsyncMock(return_value=None)
+        update = _make_media_update("photo")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        max_client.send_message.assert_not_called()
+        update.message.reply_text.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_never_sends_telegram_file_url_to_max(self):
+        """Regression for issue #35: the bot token must never reach Max."""
+        max_client = _make_max_client()
+        update = _make_media_update("photo", caption="hi")
+        tg_file = await update.message.photo[-1].get_file()
+        tg_file.file_path = "https://api.telegram.org/file/bot123:SECRET/photos/f.jpg"
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        sent_text = max_client.send_message.await_args.args[1]
+        assert "api.telegram.org" not in sent_text
+        assert "SECRET" not in sent_text
+
+    @pytest.mark.asyncio
+    async def test_upload_error_is_reported_not_raised(self):
+        max_client = _make_max_client()
+        max_client.upload_file = AsyncMock(side_effect=RuntimeError("boom"))
+        update = _make_media_update("photo")
+        ctx = _make_context(
+            user_data={PENDING_REPLY_KEY: 42},
+            bot_data={"max_client": max_client},
+        )
+
+        await _on_media_reply(update, ctx)
+
+        update.message.reply_text.assert_awaited_once()

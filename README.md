@@ -23,7 +23,7 @@
 - Пересылка текстовых сообщений, фото, видео, файлов, аудио, стикеров, контактов, геолокаций и ссылок
 - Поддержка пересланных и цитируемых сообщений (forward / reply)
 - Разное оформление для личных и групповых чатов
-- Ответ из Telegram обратно в Max (опционально, через inline-кнопку)
+- Ответ из Telegram обратно в Max (опционально, через inline-кнопку) — текстом или вложением (фото, файл, видео, голосовое)
 - Уведомления о статусе соединения с Max — при запуске, потере связи и восстановлении (с троттлингом, чтобы не спамить)
 - Поддержка SOCKS5-прокси для подключения к Telegram
 - Работает как userbot — подключается к вашему аккаунту Max через WebSocket
@@ -234,7 +234,7 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 
 1. Приложение подключается к Max через WebSocket как ваш аккаунт
 2. Новые входящие сообщения пересылаются в указанный Telegram-чат
-3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно написать текст, который отправится обратно в соответствующий чат Max
+3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно отправить обратно в соответствующий чат Max текст или вложение: фото, документ, видео, голосовое или аудио. Подпись к файлу уходит текстом сообщения. Telegram отдаёт ботам файлы размером до 20 МБ — более крупные вложения переслать не получится
 
 ## Структура проекта
 
@@ -300,7 +300,7 @@ Real-time message forwarding from **Max** messenger (max.ru) to **Telegram** —
 - Forwards text messages, photos, videos, files, audio, stickers, contacts, locations, and links
 - Supports forwarded and quoted messages (forward / reply)
 - Different formatting for DMs and group chats
-- Reply from Telegram back to Max (optional, via inline button)
+- Reply from Telegram back to Max (optional, via inline button) — text or an attachment (photo, file, video, voice)
 - Connection status notifications — on startup, disconnect, and reconnect (throttled to avoid spam)
 - SOCKS5 proxy support for connecting to Telegram
 - Works as a userbot — connects to your Max account via WebSocket
@@ -511,7 +511,7 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 
 1. The app connects to Max via WebSocket using your account credentials
 2. Incoming messages are forwarded to the specified Telegram chat
-3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it, type your response, and it gets sent back to the corresponding Max chat
+3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it and send back either text or an attachment (photo, document, video, voice or audio) to the corresponding Max chat. A file's caption is forwarded as the message text. Telegram caps bot file downloads at 20 MB, so larger attachments cannot be forwarded
 
 ## Project Structure
 
