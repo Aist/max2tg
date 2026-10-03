@@ -403,6 +403,9 @@ _UPLOAD_INFO = {
 
 def _upload_client(cmd_response, post_ok=True):
     client = MaxClient(token="tok", device_id="dev")
+    # These tests cover the upload slot and attach shape, not the wait for
+    # NOTIF_ATTACH — no notification arrives, so keep that wait out of the way.
+    client.ATTACH_READY_TIMEOUT_SEC = 0.01
     client.cmd = AsyncMock(return_value=cmd_response)
     client._post_file = AsyncMock(return_value=post_ok)
     return client
@@ -495,3 +498,111 @@ class TestSendMessageAttaches:
         await client.send_message(42, "hi")
 
         assert "attaches" not in client.cmd.await_args.args[1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# NOTIF_ATTACH — upload waits until the server reports the file processed
+# ---------------------------------------------------------------------------
+
+async def _wait_registered(client, timeout: float = 1.0) -> None:
+    """Block until upload_file has registered its NOTIF_ATTACH waiter."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not client._attach_waiters:
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("upload_file never registered an attach waiter")
+        await asyncio.sleep(0.001)
+
+
+async def _notify(client, file_id) -> None:
+    await client._handle({"opcode": OpCode.NOTIF_ATTACH, "cmd": 0,
+                          "payload": {"fileId": file_id}})
+
+
+class TestAttachReadyWait:
+    def _client(self, file_id=5187728943):
+        """Client whose upload slot returns the given fileId and whose POST succeeds."""
+        client = MaxClient(token="tok", device_id="dev")
+        client.ATTACH_READY_TIMEOUT_SEC = 0.2  # keep the suite fast
+        client.cmd = AsyncMock(return_value={
+            "info": [{"url": "https://u", "fileId": file_id, "token": "t", "name": "photo.jpg"}]
+        })
+        client._post_file = AsyncMock(return_value=True)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_upload_waits_for_notif_attach(self):
+        client = self._client()
+        task = asyncio.create_task(client.upload_file(b"x", "photo.jpg"))
+        await _wait_registered(client)
+
+        assert not task.done(), "upload_file must wait for NOTIF_ATTACH"
+
+        await _notify(client, 5187728943)
+        attach = await asyncio.wait_for(task, timeout=1)
+        assert attach["fileId"] == 5187728943
+
+    @pytest.mark.asyncio
+    async def test_notification_for_other_file_does_not_release(self):
+        client = self._client()
+        task = asyncio.create_task(client.upload_file(b"x", "photo.jpg"))
+        await _wait_registered(client)
+
+        await _notify(client, 999)
+        assert not task.done(), "a different fileId must not release this upload"
+
+        await _notify(client, 5187728943)
+        await asyncio.wait_for(task, timeout=1)
+
+    @pytest.mark.asyncio
+    async def test_string_and_int_file_ids_match(self):
+        """The upload slot and the notification may disagree on int vs str."""
+        client = self._client(file_id="5187728943")
+        task = asyncio.create_task(client.upload_file(b"x", "photo.jpg"))
+        await _wait_registered(client)
+
+        await _notify(client, 5187728943)
+        assert await asyncio.wait_for(task, timeout=1) is not None
+
+    @pytest.mark.asyncio
+    async def test_attaches_anyway_after_timeout(self):
+        """A missed notification must not silently lose the file."""
+        client = self._client()
+        client.ATTACH_READY_TIMEOUT_SEC = 0.01
+
+        assert await client.upload_file(b"x", "photo.jpg") is not None
+
+    @pytest.mark.asyncio
+    async def test_waiter_cleaned_up_after_upload(self):
+        client = self._client()
+        task = asyncio.create_task(client.upload_file(b"x", "photo.jpg"))
+        await _wait_registered(client)
+        await _notify(client, 5187728943)
+        await asyncio.wait_for(task, timeout=1)
+
+        assert client._attach_waiters == {}
+
+    @pytest.mark.asyncio
+    async def test_no_waiter_left_when_post_fails(self):
+        client = self._client()
+        client._post_file = AsyncMock(return_value=False)
+
+        assert await client.upload_file(b"x", "photo.jpg") is None
+        assert client._attach_waiters == {}
+
+    @pytest.mark.asyncio
+    async def test_cancelled_wait_gives_up_instead_of_attaching(self):
+        """A dropped connection cancels waiters; the file must not be attached blindly."""
+        client = self._client()
+        client.ATTACH_READY_TIMEOUT_SEC = 30  # must lose to the cancellation, not the timeout
+        task = asyncio.create_task(client.upload_file(b"x", "photo.jpg"))
+        await _wait_registered(client)
+
+        for fut in client._attach_waiters.values():
+            fut.cancel()
+
+        assert await asyncio.wait_for(task, timeout=1) is None
+
+    @pytest.mark.asyncio
+    async def test_notification_without_waiter_is_harmless(self):
+        client = MaxClient(token="tok", device_id="dev")
+        await _notify(client, 123)
