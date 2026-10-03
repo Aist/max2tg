@@ -236,6 +236,16 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 2. Новые входящие сообщения пересылаются в указанный Telegram-чат
 3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно отправить обратно в соответствующий чат Max текст или вложение: фото, документ, видео, голосовое или аудио. Подпись к файлу уходит текстом сообщения. Telegram отдаёт ботам файлы размером до 20 МБ — более крупные вложения переслать не получится
 
+## Приватность и логи
+
+Логи и отладочные дампы содержат вашу переписку — учитывайте это, прежде чем куда-то их отправлять.
+
+**Обычные логи** (`logs/max2tg.log` и вывод `docker-compose logs`) содержат: начало текста каждого пересланного сообщения, имена контактов и названия чатов, имена файлов. Токена аккаунта Max там нет, подписанные ссылки на файлы с недавних версий обрезаются до `host/path`.
+
+**При `DEBUG=true`** в папку `debug/` дополнительно выгружаются сырые JSON-дампы: `snapshot.json` (профиль, список чатов, участники), `dispatch_*.json` (первые 20 входящих событий целиком, вместе с телами сообщений) и `contacts_response.json`. Маскирование к ним не применяется. Включайте отладку только когда она нужна, и удаляйте `debug/` после — сами файлы не удаляются и не перезаписываются.
+
+`logs/` и `debug/` исключены из git и из Docker-образа, но если вы прикладываете лог к issue или отправляете его кому-то — просмотрите его перед этим.
+
 ## Структура проекта
 
 ```
@@ -512,6 +522,16 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
 1. The app connects to Max via WebSocket using your account credentials
 2. Incoming messages are forwarded to the specified Telegram chat
 3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it and send back either text or an attachment (photo, document, video, voice or audio) to the corresponding Max chat. A file's caption is forwarded as the message text. Telegram caps bot file downloads at 20 MB, so larger attachments cannot be forwarded
+
+## Privacy and logs
+
+Logs and debug dumps contain your conversations — keep that in mind before sending them anywhere.
+
+**Regular logs** (`logs/max2tg.log` and `docker-compose logs` output) contain: the beginning of each forwarded message, contact and chat names, file names. They hold no Max account token, and signed file URLs are trimmed to `host/path`.
+
+**With `DEBUG=true`** raw JSON dumps are additionally written to `debug/`: `snapshot.json` (profile, chat list, participants), `dispatch_*.json` (the first 20 incoming events in full, message bodies included) and `contacts_response.json`. No masking is applied to these. Enable debugging only while you need it and delete `debug/` afterwards — the files are never removed or overwritten on their own.
+
+`logs/` and `debug/` are excluded from git and from the Docker image, but if you attach a log to an issue or send it to someone, review it first.
 
 ## Project Structure
 

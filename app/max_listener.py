@@ -4,7 +4,7 @@ from datetime import datetime
 from html import escape
 from typing import Any
 
-from app.max_client import MaxClient, MaxMessage, OpCode
+from app.max_client import MaxClient, MaxMessage, OpCode, safe_url
 from app.resolver import ContactResolver
 from app.tg_sender import TelegramSender, reply_keyboard
 
@@ -93,17 +93,19 @@ async def _send_attach(
                 if resp.get(quality):
                     url = resp[quality]
                     break
-            log.info("Got url by videoId: %s", url)
+            log.info("Got url by videoId: %s", safe_url(url))
             if url:
                 data = await client.download_file(url, omit_origin=True)
                 if data:
                     if await sender.send_video(data, caption=header_text, reply_markup=kb):
                         return True
-                    log.warning("failed to send video to Telegram, falling back to thumbnail: %s", url)
+                    log.warning("failed to send video to Telegram, falling back to thumbnail: %s", safe_url(url))
                 else:
-                    log.warning("failed to download video: %s", url)
+                    log.warning("failed to download video: %s", safe_url(url))
             else:
-                log.warning("failed to find video url: %s", resp)
+                # The response is a quality → signed URL map, so log only its keys.
+                log.warning("failed to find video url, response has: %s",
+                            list(resp.keys()) if isinstance(resp, dict) else resp)
 
         # video not downloaded
         thumb = attach.get("thumbnail")
@@ -131,7 +133,7 @@ async def _send_attach(
                 },
             )
             token_url = resp.get("url")
-            log.info("Got url by fileId: %s", token_url)
+            log.info("Got url by fileId: %s", safe_url(token_url))
         if token_url:
             data = await client.download_file(token_url)
             if data:

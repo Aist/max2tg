@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 from aiohttp_socks import ProxyConnector
@@ -21,6 +22,29 @@ def _log_task_exception(task: "asyncio.Task") -> None:
     """Done-callback that logs any exception raised by a fire-and-forget task."""
     if not task.cancelled() and task.exception() is not None:
         log.exception("Unhandled exception in background task", exc_info=task.exception())
+
+
+def safe_url(url: Any) -> str:
+    """Strip the query string so a URL can be logged.
+
+    Max signs its file and video links with a capability token in the query:
+    whoever reads the log must not get access to the file itself, so only
+    scheme://host/path is kept.
+
+    This does NOT sanitize a secret embedded in the path - a Telegram file URL
+    (https://api.telegram.org/file/bot<TOKEN>/...) stays readable, so such URLs
+    must never be logged at all, sanitized or not.
+    """
+    if not url:
+        return str(url)
+    try:
+        parts = urlsplit(str(url))
+    except ValueError:
+        return "<unparsable url>"
+    if not parts.scheme and not parts.netloc:
+        return "<non-url>"
+    shown = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    return f"{shown}?…" if parts.query else shown
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -481,11 +505,11 @@ class MaxClient:
             ) as resp:
                 if resp.status == 200:
                     data = await resp.read()
-                    log.info("Downloaded %s (%d bytes)", url[:120], len(data))
+                    log.info("Downloaded %s (%d bytes)", safe_url(url), len(data))
                     return data
-                log.warning("Download failed %s — HTTP %d", url[:120], resp.status)
+                log.warning("Download failed %s — HTTP %d", safe_url(url), resp.status)
         except Exception:
-            log.exception("Download error: %s", url[:120])
+            log.exception("Download error: %s", safe_url(url))
         finally:
             if close_after:
                 await session.close()
