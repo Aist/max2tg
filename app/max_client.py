@@ -527,7 +527,13 @@ class MaxClient:
             elif op == OpCode.NOTIF_ATTACH:
                 self._resolve_attach_waiter(payload.get("fileId"))
 
-            elif cmd not in (1, 3):
+            elif cmd == 3:
+                # An error reply to a request sent without a pending future (hello,
+                # auth). Dropping it silently leaves a connection that heartbeats
+                # fine but never authorizes - most often a token/device id mismatch.
+                log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, self._mask_sensitive(payload_preview[:500]))
+
+            elif cmd != 1:
                 log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview[:500]))
 
     def _resolve_attach_waiter(self, file_id) -> None:

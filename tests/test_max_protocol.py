@@ -455,6 +455,34 @@ class TestClientAgainstBinaryServer:
         assert any(">>> SEND op=19" in r.getMessage() and "***" in r.getMessage() for r in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_rejected_auth_is_logged_not_swallowed(self, caplog):
+        caplog.set_level(logging.INFO, logger="app.max_client")
+
+        async def reject(request):
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            async for msg in ws:
+                _, _, seq, op, _ = decode_packet(msg.data)
+                if op == OpCode.HANDSHAKE:
+                    await ws.send_bytes(server_packet(op, seq, 0x100, {"ok": 1}))
+                elif op == OpCode.AUTH_SNAPSHOT:
+                    await ws.send_bytes(server_packet(op, seq, 0x300, {"error": "login.token", "token": "LEAKED"}))
+            return ws
+
+        async with running(reject) as port:
+            client = make_client(port)
+            task = asyncio.create_task(client.run())
+            await asyncio.sleep(0.3)
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("ERROR op=19" in w and "login.token" in w for w in warnings)
+        assert "LEAKED" not in caplog.text
+        assert client._my_id is None
+
+    @pytest.mark.asyncio
     async def test_undecodable_frames_do_not_drop_the_connection(self):
         async def evil(request):
             ws = web.WebSocketResponse()
