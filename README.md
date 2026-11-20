@@ -232,7 +232,7 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
                        └────────── (если REPLY_ENABLED) ──────────────┘
 ```
 
-1. Приложение подключается к Max через WebSocket как ваш аккаунт
+1. Приложение подключается к Max через WebSocket (`wss://api.oneme.ru/websocket`, бинарный протокол: пакеты в формате MessagePack, при необходимости сжатые LZ4) как ваш аккаунт
 2. Новые входящие сообщения пересылаются в указанный Telegram-чат
 3. Если `REPLY_ENABLED=true`, под каждым сообщением появляется кнопка «Ответить» — нажав её, можно отправить обратно в соответствующий чат Max текст или вложение: фото, документ, видео, голосовое или аудио. Подпись к файлу уходит текстом сообщения. Telegram отдаёт ботам файлы размером до 20 МБ — более крупные вложения переслать не получится
 
@@ -261,6 +261,7 @@ max2tg/
 ├── tests/
 │   ├── test_config.py             # тесты загрузки настроек
 │   ├── test_max_client.py         # тесты клиента Max (опкоды, парсинг)
+│   ├── test_max_protocol.py       # тесты бинарного протокола Max (пакеты, LZ4, hello)
 │   ├── test_max_listener.py       # тесты форматирования сообщений
 │   ├── test_resolver.py           # тесты резолвинга имён контактов
 │   ├── test_tg_handler.py         # тесты обработки ответов из Telegram
@@ -290,6 +291,7 @@ pytest
 Тесты покрывают:
 - загрузку и валидацию конфигурации (`config.py`)
 - парсинг сообщений и опкоды WebSocket-клиента (`max_client.py`)
+- бинарный протокол Max: заголовок пакета, MessagePack, распаковку LZ4 и работу клиента с локальным WebSocket-сервером (`test_max_protocol.py`)
 - форматирование размеров файлов и определение типа медиа (`max_listener.py`)
 - резолвинг имён контактов и парсинг снапшота (`resolver.py`)
 - обработку ответов из Telegram и пересылку в Max (`tg_handler.py`)
@@ -519,7 +521,7 @@ Max (WebSocket) ──→ max2tg ──→ [SOCKS5 proxy] ──→ Telegram Bot
                        └────────── (if REPLY_ENABLED) ────────────────┘
 ```
 
-1. The app connects to Max via WebSocket using your account credentials
+1. The app connects to Max via WebSocket (`wss://api.oneme.ru/websocket`, a binary protocol: MessagePack packets, optionally LZ4-compressed) using your account credentials
 2. Incoming messages are forwarded to the specified Telegram chat
 3. If `REPLY_ENABLED=true`, each message includes a "Reply" button — press it and send back either text or an attachment (photo, document, video, voice or audio) to the corresponding Max chat. A file's caption is forwarded as the message text. Telegram caps bot file downloads at 20 MB, so larger attachments cannot be forwarded
 
@@ -548,6 +550,7 @@ max2tg/
 ├── tests/
 │   ├── test_config.py             # settings loading tests
 │   ├── test_max_client.py         # Max client tests (opcodes, parsing)
+│   ├── test_max_protocol.py       # Max binary protocol tests (packets, LZ4, hello)
 │   ├── test_max_listener.py       # message formatting tests
 │   ├── test_resolver.py           # contact name resolution tests
 │   ├── test_tg_handler.py         # Telegram reply handler tests
@@ -577,6 +580,7 @@ pytest
 Test coverage:
 - configuration loading and validation (`config.py`)
 - message parsing and WebSocket opcodes (`max_client.py`)
+- the Max binary protocol: packet header, MessagePack, LZ4 decoding and the client against a local WebSocket server (`test_max_protocol.py`)
 - file size formatting and media type detection (`max_listener.py`)
 - contact name resolution and snapshot parsing (`resolver.py`)
 - Telegram reply handling and forwarding to Max (`tg_handler.py`)
