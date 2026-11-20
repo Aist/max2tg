@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import struct
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -11,6 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
+import msgpack
 from aiohttp_socks import ProxyConnector
 
 log = logging.getLogger(__name__)
@@ -83,6 +85,132 @@ _HTTP_HEADERS = {
 _HTTP_HEADERS_NO_ORIGIN = {k: v for k, v in _HTTP_HEADERS.items() if k != "Origin"}
 
 
+# ── wire format ────────────────────────────────────────────────────
+#
+# wss://api.oneme.ru/websocket speaks the same binary protocol as Max's native
+# clients (the old JSON endpoint, ws-api.oneme.ru, is no longer reachable).
+# One WebSocket binary message = one packet: a 10-byte big-endian header
+# followed by a MessagePack body.
+#
+#   ver u8 | cmd u16 | seq u8 | opcode u16 | packed_len u32
+#
+# packed_len: the top byte is a compression flag (non-zero -> the body is a raw
+# LZ4 block, no size prefix), the low three bytes are the body length.
+# cmd: 0x000 request / server push, 0x100 response, 0x300 error. The rest of
+# this client still uses the small JSON-era values 0 / 1 / 3 (see _normalize_cmd).
+_HEADER = struct.Struct(">BHBHI")
+_PROTO_VER = 10  # first byte of the browser's own packets
+_MAX_BODY = 0xFFFFFF
+
+
+def encode_packet(opcode: int, seq: int, payload: Any, cmd: int = 0, ver: int = _PROTO_VER) -> bytes:
+    """Serialize one packet (uncompressed) ready for ws.send_bytes()."""
+    body = msgpack.packb(payload, use_bin_type=True)
+    if len(body) > _MAX_BODY:
+        raise ValueError(f"packet body too large: {len(body)} bytes")
+    return _HEADER.pack(ver, cmd, seq & 0xFF, opcode, len(body)) + body
+
+
+_LZ4_MAX_OUTPUT = 64 * 1024 * 1024  # refuse absurd expansion from a corrupt block
+
+
+def _lz4_decompress(data: bytes) -> bytes:
+    """Decode a raw LZ4 block (no size prefix, as Max sends it).
+
+    Pure Python on purpose: packets are small, and this keeps the native `lz4`
+    package (a compiled extension) out of the image. Raises ValueError on a
+    malformed block.
+    """
+    out = bytearray()
+    i = 0
+    n = len(data)
+    while i < n:
+        token = data[i]
+        i += 1
+
+        lit = token >> 4
+        if lit == 15:
+            while True:
+                if i >= n:
+                    raise ValueError("lz4: truncated literal length")
+                b = data[i]
+                i += 1
+                lit += b
+                if b != 255:
+                    break
+        if i + lit > n:
+            raise ValueError("lz4: truncated literals")
+        out += data[i:i + lit]
+        i += lit
+        if i >= n:
+            break  # the last sequence carries literals only
+
+        if i + 2 > n:
+            raise ValueError("lz4: truncated match offset")
+        offset = data[i] | (data[i + 1] << 8)
+        i += 2
+        mlen = token & 15
+        if mlen == 15:
+            while True:
+                if i >= n:
+                    raise ValueError("lz4: truncated match length")
+                b = data[i]
+                i += 1
+                mlen += b
+                if b != 255:
+                    break
+        mlen += 4
+
+        if offset == 0 or offset > len(out):
+            raise ValueError("lz4: bad match offset")
+        if len(out) + mlen > _LZ4_MAX_OUTPUT:
+            raise ValueError("lz4: output too large")
+        start = len(out) - offset
+        if offset >= mlen:
+            out += out[start:start + mlen]
+        else:
+            # Overlapping copy: the last `offset` bytes repeat until mlen is reached.
+            pattern = out[start:]
+            reps, rem = divmod(mlen, offset)
+            out += pattern * reps + pattern[:rem]
+    return bytes(out)
+
+
+def _ext_hook(code: int, data: bytes) -> Any:
+    """Decode MessagePack extension values that plain msgpack cannot represent.
+
+    Type 1 is decoded as a nested MessagePack value, falling back to a big-endian
+    signed integer; unknown types are kept as msgpack.ExtType.
+    """
+    if code == 1:
+        try:
+            return msgpack.unpackb(data)
+        except Exception:
+            return int.from_bytes(data, "big", signed=True)
+    return msgpack.ExtType(code, data)
+
+
+def decode_packet(data: bytes) -> tuple[int, int, int, int, Any]:
+    """Parse one packet. Returns (ver, cmd, seq, opcode, payload)."""
+    if len(data) < _HEADER.size:
+        raise ValueError(f"packet shorter than its header: {len(data)} bytes")
+    ver, cmd, seq, opcode, packed = _HEADER.unpack_from(data)
+    compressed = packed >> 24
+    length = packed & _MAX_BODY
+    body = data[_HEADER.size:_HEADER.size + length]
+    if len(body) < length:
+        raise ValueError(f"truncated packet: header says {length} bytes, got {len(body)}")
+    if compressed:
+        body = _lz4_decompress(body)
+    payload = msgpack.unpackb(body, raw=False, strict_map_key=False, ext_hook=_ext_hook) if body else {}
+    return ver, cmd, seq, opcode, payload
+
+
+def _normalize_cmd(cmd: int) -> int:
+    """Map the wire cmd (0x000 / 0x100 / 0x300) to the 0 / 1 / 3 used by _handle."""
+    return cmd >> 8 if cmd >= 0x100 else cmd
+
+
 class OpCode(IntEnum):
     HEARTBEAT_PING = 1
     HANDSHAKE = 6
@@ -119,7 +247,7 @@ class MaxMessage:
 
 
 class MaxClient:
-    WS_URL = "wss://ws-api.oneme.ru/websocket"
+    WS_URL = "wss://api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
     # An uploaded file is not attachable until the server reports it processed
@@ -171,17 +299,11 @@ class MaxClient:
         if not self._ws or self._ws.closed:
             return -1
         seq = self._seq
-        pkt = {
-            "ver": 11,
-            "cmd": 0,
-            "seq": seq,
-            "opcode": opcode,
-            "payload": payload,
-        }
-        self._seq += 1
-        raw = json.dumps(pkt, ensure_ascii=False)
-        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, self._mask_sensitive(raw[:800]))
-        await self._ws.send_str(raw)
+        self._seq = (self._seq + 1) % 256  # seq is a single byte on the wire
+        if log.isEnabledFor(logging.DEBUG):
+            shown = json.dumps(payload, ensure_ascii=False, default=str)
+            log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, self._mask_sensitive(shown[:800]))
+        await self._ws.send_bytes(encode_packet(opcode, seq, payload))
         return seq
 
     async def cmd(self, opcode: int, payload: dict, timeout: float = 10) -> dict:
@@ -235,32 +357,29 @@ class MaxClient:
                         self._pending.clear()
 
                         log.info("Connected. Sending handshake...")
-                        await self._send(
-                            OpCode.HANDSHAKE,
-                            {
-                                "deviceId": self.device_id,
-                                "userAgent": {
-                                    "deviceType": "WEB",
-                                    "deviceName": "Chrome 131.0.0.0",
-                                    "headerUserAgent": _USER_AGENT,
-                                    "appVersion": "26.4.7",
-                                },
-                            },
-                        )
+                        await self._send(OpCode.HANDSHAKE, self._hello_payload())
 
                         self._heartbeat_task = asyncio.create_task(
                             self._heartbeat_loop()
                         )
 
                         async for msg in ws:
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                await self._handle(json.loads(msg.data))
+                            if msg.type == aiohttp.WSMsgType.BINARY:
+                                await self._handle_binary(msg.data)
+                            elif msg.type == aiohttp.WSMsgType.TEXT:
+                                # api.oneme.ru speaks binary only; log in case that changes.
+                                log.warning("Unexpected text frame: %s", msg.data[:200])
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
                                 aiohttp.WSMsgType.ERROR,
                             ):
                                 log.warning("WebSocket closed/error: %s", msg.type)
                                 break
+
+                        log.warning(
+                            "WebSocket loop ended: close_code=%s exc=%r",
+                            ws.close_code, ws.exception(),
+                        )
 
                 except Exception:
                     log.exception("Connection error")
@@ -288,7 +407,43 @@ class MaxClient:
                 log.info("Reconnecting in %ds...", self.RECONNECT_SEC)
                 await asyncio.sleep(self.RECONNECT_SEC)
 
+    def _hello_payload(self) -> dict:
+        """First packet (opcode 6)."""
+        return {
+            "deviceId": self.device_id,
+            "userAgent": {
+                "deviceType": "WEB",
+                "deviceName": "Chrome 131.0.0.0",
+                "headerUserAgent": _USER_AGENT,
+                "appVersion": "26.4.7",
+            },
+        }
+
     # ── event dispatcher ───────────────────────────────────────────
+
+    async def _handle_binary(self, raw: bytes) -> None:
+        """Decode one binary packet and feed it to _handle() in its dict form."""
+        try:
+            ver, cmd, seq, opcode, payload = decode_packet(raw)
+        except Exception:
+            # Log only the 10-byte header (flags, length), never the body.
+            log.exception("Undecodable frame (%d bytes), header=%s", len(raw), raw[:10].hex())
+            return
+
+        log.debug("<<< RECV ver=%s cmd=%#x seq=%s op=%s", ver, cmd, seq, opcode)
+        # A list body carries several independent messages sharing one header.
+        if isinstance(payload, list) and all(isinstance(p, dict) for p in payload):
+            payloads = payload
+        else:
+            payloads = [payload]
+        for item in payloads:
+            await self._handle({
+                "ver": ver,
+                "cmd": _normalize_cmd(cmd),
+                "seq": seq,
+                "opcode": opcode,
+                "payload": item,
+            })
 
     async def _handle(self, data: dict):
         op = data.get("opcode")
@@ -313,7 +468,8 @@ class MaxClient:
 
         # server-initiated events — not a reply to one of our requests
         else:
-            payload_preview = json.dumps(payload, ensure_ascii=False)
+            # default=str: msgpack bodies can carry bytes, which json can't encode.
+            payload_preview = json.dumps(payload, ensure_ascii=False, default=str)
             if len(payload_preview) > 3000:
                 payload_preview = payload_preview[:3000] + "…"
 
@@ -554,7 +710,7 @@ class MaxClient:
         path = os.path.join(DEBUG_DIR, filename)
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
             log.info("Dumped %s (%d bytes)", path, os.path.getsize(path))
         except Exception:
             log.exception("Failed to dump %s", path)

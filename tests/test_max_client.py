@@ -250,7 +250,7 @@ class TestMaxClientInit:
         assert c._my_id is None
 
     def test_ws_url_constant(self):
-        assert MaxClient.WS_URL == "wss://ws-api.oneme.ru/websocket"
+        assert MaxClient.WS_URL == "wss://api.oneme.ru/websocket"
 
     def test_heartbeat_sec_constant(self):
         assert MaxClient.HEARTBEAT_SEC == 30
