@@ -148,6 +148,11 @@ class TestExtHook:
     def test_type_1_nested_msgpack_value(self):
         assert _ext_hook(1, msgpack.packb(12345)) == 12345
 
+    def test_type_1_value_captured_from_the_server(self):
+        # ver=10 packets carry 64-bit ids (chatId, sender, message id, ...) as
+        # ext type 1 whose data is a complete MessagePack integer (here int32).
+        assert _ext_hook(1, b"\xd2\x00\xb7]\xc0") == 12017088
+
     def test_type_1_falls_back_to_big_endian_signed_int(self):
         assert _ext_hook(1, (2 ** 40 + 5).to_bytes(8, "big", signed=True)) == 2 ** 40 + 5
         assert _ext_hook(1, (-2 ** 40).to_bytes(8, "big", signed=True)) == -2 ** 40
