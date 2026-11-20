@@ -231,6 +231,47 @@ class TestLz4Decoder:
 
 
 # ---------------------------------------------------------------------------
+# hello packet (opcode 6)
+# ---------------------------------------------------------------------------
+
+class TestHelloPayload:
+    def _hello(self, **kwargs):
+        return MaxClient(token="tok", device_id=kwargs.pop("device_id", "dev"), **kwargs)._hello_payload()
+
+    def test_has_the_web_clients_fields(self):
+        hello = self._hello()
+        assert set(hello) == {"deviceId", "userAgent", "clientSessionId"}
+        assert set(hello["userAgent"]) == {
+            "deviceType", "pushDeviceType", "locale", "deviceLocale", "osVersion", "deviceName",
+            "headerUserAgent", "isPwa", "appVersion", "screen", "timezone",
+        }
+        assert hello["userAgent"]["deviceType"] == "WEB"
+        assert hello["userAgent"]["isPwa"] is False
+
+    def test_device_id_comes_from_the_constructor(self):
+        assert self._hello(device_id="abc")["deviceId"] == "abc"
+
+    def test_survives_a_wire_roundtrip(self):
+        hello = self._hello()
+        assert decode_packet(encode_packet(OpCode.HANDSHAKE, 0, hello))[4] == hello
+
+    def test_client_session_id_is_an_int_that_is_stable_per_client(self):
+        client = MaxClient(token="tok", device_id="dev")
+        assert isinstance(client._hello_payload()["clientSessionId"], int)
+        assert client._hello_payload()["clientSessionId"] == client._hello_payload()["clientSessionId"]
+
+    def test_hello_and_http_headers_describe_the_same_browser(self):
+        """A mismatch between the hello and the HTTP headers would look like a fake client."""
+        ua = self._hello()["userAgent"]
+        assert ua["headerUserAgent"] == max_client._BROWSER_HEADERS["User-Agent"]
+        chrome = ua["headerUserAgent"].split("Chrome/")[1].split(".")[0]
+        assert f'"Google Chrome";v="{chrome}"' in max_client._BROWSER_HEADERS["sec-ch-ua"]
+        assert ua["deviceName"].startswith("Google Chrome " + chrome)
+        platform = max_client._BROWSER_HEADERS["sec-ch-ua-platform"].strip('"')
+        assert ua["osVersion"] == platform
+
+
+# ---------------------------------------------------------------------------
 # the client against a local WebSocket server speaking the binary protocol
 # ---------------------------------------------------------------------------
 
