@@ -1,9 +1,11 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import random
 import re
+import struct
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -11,11 +13,101 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import aiohttp
+import lz4.block
+import msgpack
 from aiohttp_socks import ProxyConnector
 
 log = logging.getLogger(__name__)
 
 DEBUG_DIR = "debug"
+APP_VERSION = "26.11.9"
+
+# 10-byte big-endian header: proto:uint8, cmd:uint8, seq:int16,
+# opcode:int16, LZ4 compression coefficient:uint8, length:uint24.
+FRAME_HEADER_SIZE = 10
+FRAME_PROTO = 10
+FRAME_LZ4_THRESHOLD = 32
+
+
+def _msgpack_default(value: Any) -> msgpack.ExtType:
+    """Encode integers outside MsgPack's native range as ext type 1."""
+    if isinstance(value, int):
+        return msgpack.ExtType(1, msgpack.packb(value, use_bin_type=True))
+    raise TypeError(f"cannot MsgPack-encode {type(value).__name__}")
+
+
+def _msgpack_ext_hook(code: int, data: bytes) -> Any:
+    if code != 1:
+        return msgpack.ExtType(code, data)
+    try:
+        return msgpack.unpackb(
+            data,
+            raw=False,
+            strict_map_key=False,
+            ext_hook=_msgpack_ext_hook,
+        )
+    except (msgpack.ExtraData, msgpack.FormatError, msgpack.StackError, ValueError) as exc:
+        raise ValueError("invalid MAX bigint MsgPack extension") from exc
+
+
+def _stringify_map_keys(value: Any) -> Any:
+    """Keep the dictionary shape exposed by the former JSON transport."""
+    if isinstance(value, dict):
+        return {str(key): _stringify_map_keys(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_stringify_map_keys(item) for item in value]
+    return value
+
+
+def _pack_uint24(value: int) -> bytes:
+    if not 0 <= value <= 0xFFFFFF:
+        raise ValueError("MAX frame body length must fit in 24 bits")
+    return value.to_bytes(3, "big")
+
+
+def encode_frame(cmd: int, seq: int, opcode: int, payload: dict) -> bytes:
+    """Encode one MAX binary WebSocket frame."""
+    body = msgpack.packb(payload, default=_msgpack_default, use_bin_type=True, strict_types=True)
+    compression = 0
+    if len(body) > FRAME_LZ4_THRESHOLD:
+        compressed = lz4.block.compress(body, store_size=False)
+        if len(compressed) < len(body):
+            compression = min(math.ceil(len(body) / len(compressed)), 0xFF)
+            body = compressed
+    header = struct.pack(">BBhhB", FRAME_PROTO, cmd, seq, int(opcode), compression) + _pack_uint24(len(body))
+    return header + body
+
+
+def decode_frame(frame: bytes) -> dict:
+    """Decode one MAX binary WebSocket frame into the legacy event envelope."""
+    if len(frame) < FRAME_HEADER_SIZE:
+        raise ValueError("MAX frame is shorter than its header")
+    proto, cmd, seq, opcode, compression = struct.unpack(">BBhhB", frame[:7])
+    if proto != FRAME_PROTO:
+        raise ValueError(f"unsupported MAX frame proto {proto}")
+    body_length = int.from_bytes(frame[7:10], "big")
+    body = frame[FRAME_HEADER_SIZE:]
+    if len(body) != body_length:
+        raise ValueError("MAX frame body length does not match header")
+    if compression:
+        body = lz4.block.decompress(body, uncompressed_size=body_length * compression)
+    payload = msgpack.unpackb(
+        body,
+        raw=False,
+        strict_map_key=False,
+        ext_hook=_msgpack_ext_hook,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("MAX frame payload must be a map")
+    payload = _stringify_map_keys(payload)
+    return {"cmd": cmd, "seq": seq, "opcode": opcode, "payload": payload}
+
+
+def _json_default(value: Any) -> str:
+    """Prevent diagnostic logging from leaking binary payload content."""
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return f"<{len(value)} bytes>"
+    return f"<{type(value).__name__}>"
 
 
 def _log_task_exception(task: "asyncio.Task") -> None:
@@ -119,7 +211,7 @@ class MaxMessage:
 
 
 class MaxClient:
-    WS_URL = "wss://ws-api.oneme.ru/websocket"
+    WS_URL = "wss://api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
     # An uploaded file is not attachable until the server reports it processed
@@ -171,17 +263,11 @@ class MaxClient:
         if not self._ws or self._ws.closed:
             return -1
         seq = self._seq
-        pkt = {
-            "ver": 11,
-            "cmd": 0,
-            "seq": seq,
-            "opcode": opcode,
-            "payload": payload,
-        }
-        self._seq += 1
-        raw = json.dumps(pkt, ensure_ascii=False)
-        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, self._mask_sensitive(raw[:800]))
-        await self._ws.send_str(raw)
+        self._seq = -32768 if seq == 32767 else seq + 1
+        frame = encode_frame(cmd=0, seq=seq, opcode=opcode, payload=payload)
+        payload_preview = json.dumps(payload, ensure_ascii=False, default=_json_default)
+        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, self._mask_sensitive(payload_preview[:800]))
+        await self._ws.send_bytes(frame)
         return seq
 
     async def cmd(self, opcode: int, payload: dict, timeout: float = 10) -> dict:
@@ -243,7 +329,7 @@ class MaxClient:
                                     "deviceType": "WEB",
                                     "deviceName": "Chrome 131.0.0.0",
                                     "headerUserAgent": _USER_AGENT,
-                                    "appVersion": "26.4.7",
+                                    "appVersion": APP_VERSION,
                                 },
                             },
                         )
@@ -253,8 +339,10 @@ class MaxClient:
                         )
 
                         async for msg in ws:
-                            if msg.type == aiohttp.WSMsgType.TEXT:
-                                await self._handle(json.loads(msg.data))
+                            if msg.type == aiohttp.WSMsgType.BINARY:
+                                await self._handle(decode_frame(msg.data))
+                            elif msg.type == aiohttp.WSMsgType.TEXT:
+                                log.warning("Ignoring legacy text WebSocket frame")
                             elif msg.type in (
                                 aiohttp.WSMsgType.CLOSED,
                                 aiohttp.WSMsgType.ERROR,
@@ -313,7 +401,7 @@ class MaxClient:
 
         # server-initiated events — not a reply to one of our requests
         else:
-            payload_preview = json.dumps(payload, ensure_ascii=False)
+            payload_preview = json.dumps(payload, ensure_ascii=False, default=_json_default)
             if len(payload_preview) > 3000:
                 payload_preview = payload_preview[:3000] + "…"
 
@@ -554,7 +642,7 @@ class MaxClient:
         path = os.path.join(DEBUG_DIR, filename)
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2, default=_json_default)
             log.info("Dumped %s (%d bytes)", path, os.path.getsize(path))
         except Exception:
             log.exception("Failed to dump %s", path)

@@ -1,11 +1,119 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
 import asyncio
+import math
+import struct
 
+import lz4.block
+import msgpack
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from app.max_client import MaxClient, MaxMessage, OpCode, safe_url
+from app.max_client import (
+    APP_VERSION,
+    MaxClient,
+    MaxMessage,
+    OpCode,
+    decode_frame,
+    encode_frame,
+    safe_url,
+)
+
+
+# ---------------------------------------------------------------------------
+# Binary WebSocket frame codec
+# ---------------------------------------------------------------------------
+
+class TestBinaryFrameCodec:
+    def test_round_trip_preserves_header_and_payload(self):
+        frame = encode_frame(
+            cmd=0,
+            seq=42,
+            opcode=OpCode.SEND_MESSAGE,
+            payload={"chatId": 7, "message": {"text": "hello"}},
+        )
+
+        assert len(frame[:10]) == 10
+        assert decode_frame(frame) == {
+            "cmd": 0,
+            "seq": 42,
+            "opcode": OpCode.SEND_MESSAGE,
+            "payload": {"chatId": 7, "message": {"text": "hello"}},
+        }
+
+    def test_large_payload_is_lz4_compressed(self):
+        payload = {"text": "x" * 200}
+        frame = encode_frame(cmd=1, seq=3, opcode=OpCode.DISPATCH, payload=payload)
+
+        plain_body = msgpack.packb(payload, use_bin_type=True, strict_types=True)
+        compressed_body = frame[10:]
+        expected_cof = math.ceil(len(plain_body) / len(compressed_body))
+
+        assert frame[6] == expected_cof
+        assert lz4.block.decompress(
+            compressed_body,
+            uncompressed_size=len(compressed_body) * expected_cof,
+        ) == plain_body
+        assert decode_frame(frame)["payload"] == payload
+
+    def test_msgpack_bigint_extension_round_trips_id(self):
+        big_id = 2**60 + 99
+        body = msgpack.packb(
+            {"id": msgpack.ExtType(1, msgpack.packb(big_id, use_bin_type=True))},
+            use_bin_type=True,
+        )
+        frame = struct.pack(">BBhhB", 10, 0, 1, OpCode.SEND_MESSAGE, 0) + len(body).to_bytes(3, "big") + body
+
+        assert decode_frame(frame)["payload"] == {"id": big_id}
+
+    def test_header_uses_signed_sequence_and_opcode_fields(self):
+        frame = encode_frame(cmd=3, seq=-1, opcode=300, payload={"error": "x"})
+
+        assert frame[:7] == struct.pack(">BBhhB", 10, 3, -1, 300, 0)
+        assert decode_frame(frame)["seq"] == -1
+
+    async def test_send_uses_a_binary_websocket_frame(self):
+        client = _make_client()
+        client._ws = Mock(closed=False)
+        client._ws.send_bytes = AsyncMock()
+
+        await client._send(OpCode.HEARTBEAT_PING, {"interactive": False})
+
+        frame = client._ws.send_bytes.await_args.args[0]
+        assert decode_frame(frame)["opcode"] == OpCode.HEARTBEAT_PING
+
+    async def test_send_wraps_sequence_after_signed_int16_maximum(self):
+        client = _make_client()
+        client._ws = Mock(closed=False)
+        client._ws.send_bytes = AsyncMock()
+        client._seq = 32767
+
+        await client._send(OpCode.HEARTBEAT_PING, {"interactive": False})
+        await client._send(OpCode.HEARTBEAT_PING, {"interactive": False})
+
+        first, second = [call.args[0] for call in client._ws.send_bytes.await_args_list]
+        assert decode_frame(first)["seq"] == 32767
+        assert decode_frame(second)["seq"] == -32768
+
+
+class TestBinaryPayloadLogging:
+    async def test_auth_snapshot_with_binary_field_reaches_ready_callback(self):
+        client = _make_client()
+        received = []
+
+        @client.on_ready
+        async def ready(snapshot):
+            received.append(snapshot)
+
+        payload = {"profile": {"contact": {"id": 9}}, "binary": b"\x00\xff"}
+        await client._handle({"opcode": OpCode.AUTH_SNAPSHOT, "cmd": 1, "seq": 0, "payload": payload})
+        await asyncio.sleep(0)
+
+        assert received == [payload]
+
+
+def test_current_max_app_version():
+    assert APP_VERSION == "26.11.9"
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +358,7 @@ class TestMaxClientInit:
         assert c._my_id is None
 
     def test_ws_url_constant(self):
-        assert MaxClient.WS_URL == "wss://ws-api.oneme.ru/websocket"
+        assert MaxClient.WS_URL == "wss://api.oneme.ru/websocket"
 
     def test_heartbeat_sec_constant(self):
         assert MaxClient.HEARTBEAT_SEC == 30
