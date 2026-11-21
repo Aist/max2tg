@@ -138,19 +138,28 @@ def safe_url(url: Any) -> str:
     shown = f"{parts.scheme}://{parts.netloc}{parts.path}"
     return f"{shown}?…" if parts.query else shown
 
+# The client presents itself as a regular web.max.ru browser session. The
+# values below mirror what Chrome sends in its own hello packet; the HTTP
+# headers and the hello payload are both built from them, so keep them
+# consistent (user agent, Chrome version, OS) and bump APP_VERSION if Max
+# starts rejecting it.
 _USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
+    "Chrome/152.0.0.0 Safari/537.36"
 )
+_DEVICE_NAME = "Google Chrome 152.0"
+_OS_VERSION = "Linux"
+_SCREEN = "1920x1080 1.0x"
+_TIMEZONE = "Europe/Moscow"
 
 _BROWSER_HEADERS = {
     "User-Agent": _USER_AGENT,
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br, zstd",
-    "sec-ch-ua": '"Chromium";v="131", "Google Chrome";v="131", "Not?A_Brand";v="99"',
+    "sec-ch-ua": '"Chromium";v="152", "Google Chrome";v="152", "Not?A_Brand";v="99"',
     "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
+    "sec-ch-ua-platform": '"Linux"',
 }
 
 _WS_HEADERS = {
@@ -235,6 +244,8 @@ class MaxClient:
         self._pending: dict[int, asyncio.Future] = {}
         # fileId (as str) → future resolved when NOTIF_ATTACH says it is processed
         self._attach_waiters: dict[str, asyncio.Future] = {}
+        # Sent in the hello packet; the web client generates one per page load.
+        self._client_session_id = int(time.time() * 1000)
         self._on_disconnect_cb = None
         self.chat_ids: list[int] = []
         if chat_ids:
@@ -321,18 +332,7 @@ class MaxClient:
                         self._pending.clear()
 
                         log.info("Connected. Sending handshake...")
-                        await self._send(
-                            OpCode.HANDSHAKE,
-                            {
-                                "deviceId": self.device_id,
-                                "userAgent": {
-                                    "deviceType": "WEB",
-                                    "deviceName": "Chrome 131.0.0.0",
-                                    "headerUserAgent": _USER_AGENT,
-                                    "appVersion": APP_VERSION,
-                                },
-                            },
-                        )
+                        await self._send(OpCode.HANDSHAKE, self._hello_payload())
 
                         self._heartbeat_task = asyncio.create_task(
                             self._heartbeat_loop()
@@ -375,6 +375,26 @@ class MaxClient:
 
                 log.info("Reconnecting in %ds...", self.RECONNECT_SEC)
                 await asyncio.sleep(self.RECONNECT_SEC)
+
+    def _hello_payload(self) -> dict:
+        """First packet (opcode 6), laid out like the web client's own."""
+        return {
+            "deviceId": self.device_id,
+            "userAgent": {
+                "deviceType": "WEB",
+                "pushDeviceType": "WEBPUSH",
+                "locale": "ru",
+                "deviceLocale": "ru",
+                "osVersion": _OS_VERSION,
+                "deviceName": _DEVICE_NAME,
+                "headerUserAgent": _USER_AGENT,
+                "isPwa": False,
+                "appVersion": APP_VERSION,
+                "screen": _SCREEN,
+                "timezone": _TIMEZONE,
+            },
+            "clientSessionId": self._client_session_id,
+        }
 
     # ── event dispatcher ───────────────────────────────────────────
 
@@ -440,7 +460,14 @@ class MaxClient:
             elif op == OpCode.NOTIF_ATTACH:
                 self._resolve_attach_waiter(payload.get("fileId"))
 
-            elif cmd not in (1, 3):
+            elif cmd == 3:
+                # An error reply to a request sent without a pending future
+                # (hello, auth). Dropped silently, it leaves a connection that
+                # heartbeats fine but never authorizes — most often a
+                # token/device mismatch.
+                log.warning("<<< ERROR op=%-4s seq=%s | %s", op, seq, self._mask_sensitive(payload_preview[:500]))
+
+            elif cmd != 1:
                 log.info("<<< EVENT op=%-4s cmd=%-3s | %s", op, cmd, self._mask_sensitive(payload_preview[:500]))
 
     def _resolve_attach_waiter(self, file_id) -> None:

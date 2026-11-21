@@ -1,6 +1,7 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
 import asyncio
+import logging
 import math
 import struct
 
@@ -14,6 +15,8 @@ from app.max_client import (
     MaxClient,
     MaxMessage,
     OpCode,
+    _BROWSER_HEADERS,
+    _USER_AGENT,
     decode_frame,
     encode_frame,
     safe_url,
@@ -110,6 +113,82 @@ class TestBinaryPayloadLogging:
         await asyncio.sleep(0)
 
         assert received == [payload]
+
+
+class TestHelloPayload:
+    """Handshake packet must look like the web client's own hello."""
+
+    def test_repeats_the_web_client_field_set(self):
+        client = _make_client()
+        hello = client._hello_payload()
+
+        assert hello["deviceId"] == "dev"
+        assert hello["clientSessionId"] == client._client_session_id
+        assert hello["userAgent"] == {
+            "deviceType": "WEB",
+            "pushDeviceType": "WEBPUSH",
+            "locale": "ru",
+            "deviceLocale": "ru",
+            "osVersion": "Linux",
+            "deviceName": "Google Chrome 152.0",
+            "headerUserAgent": _USER_AGENT,
+            "isPwa": False,
+            "appVersion": APP_VERSION,
+            "screen": "1920x1080 1.0x",
+            "timezone": "Europe/Moscow",
+        }
+
+    def test_user_agent_matches_http_headers(self):
+        """hello and the HTTP headers must present the same browser."""
+        client = _make_client()
+        ua = client._hello_payload()["userAgent"]
+
+        assert ua["headerUserAgent"] == _BROWSER_HEADERS["User-Agent"]
+        assert '"152"' in _BROWSER_HEADERS["sec-ch-ua"]
+        assert _BROWSER_HEADERS["sec-ch-ua-platform"] == '"Linux"'
+
+    def test_client_session_id_captured_once_at_init(self):
+        with patch("app.max_client.time.time", return_value=1_700_000_000.5):
+            client = MaxClient(token="tok", device_id="dev")
+        assert client._client_session_id == 1_700_000_000_500
+
+    def test_hello_survives_a_wire_round_trip(self):
+        client = _make_client()
+        frame = encode_frame(cmd=0, seq=0, opcode=OpCode.HANDSHAKE, payload=client._hello_payload())
+        assert decode_frame(frame)["payload"] == client._hello_payload()
+
+
+class TestUnclaimedErrorResponse:
+    """An error reply nobody waits for (hello, auth) must not vanish silently."""
+
+    @pytest.mark.asyncio
+    async def test_cmd3_without_pending_future_is_logged(self, caplog):
+        client = _make_client()
+        with caplog.at_level(logging.WARNING, logger="app.max_client"):
+            await client._handle({
+                "opcode": OpCode.AUTH_SNAPSHOT,
+                "cmd": 3,
+                "seq": 7,
+                "payload": {"error": "auth.token.invalid"},
+            })
+
+        errors = [r for r in caplog.records
+                  if r.levelno == logging.WARNING and "<<< ERROR" in r.message]
+        assert errors, "unclaimed cmd=3 response must reach the log"
+        assert "auth.token.invalid" in errors[0].message
+
+    @pytest.mark.asyncio
+    async def test_event_is_not_mistaken_for_error(self, caplog):
+        client = _make_client()
+        with caplog.at_level(logging.WARNING, logger="app.max_client"):
+            await client._handle({
+                "opcode": OpCode.DISPATCH,
+                "cmd": 0,
+                "seq": 0,
+                "payload": {"chatId": 1, "message": {"id": 1}},
+            })
+
+        assert not [r for r in caplog.records if "<<< ERROR" in r.message]
 
 
 def test_current_max_app_version():
