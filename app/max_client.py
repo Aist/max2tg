@@ -91,12 +91,17 @@ def decode_frame(frame: bytes) -> dict:
         raise ValueError("MAX frame body length does not match header")
     if compression:
         body = lz4.block.decompress(body, uncompressed_size=body_length * compression)
-    payload = msgpack.unpackb(
-        body,
-        raw=False,
-        strict_map_key=False,
-        ext_hook=_msgpack_ext_hook,
-    )
+    if not body:
+        payload = {}
+    else:
+        payload = msgpack.unpackb(
+            body,
+            raw=False,
+            strict_map_key=False,
+            ext_hook=_msgpack_ext_hook,
+        )
+        if payload is None:
+            payload = {}
     if not isinstance(payload, dict):
         raise ValueError("MAX frame payload must be a map")
     payload = _stringify_map_keys(payload)
