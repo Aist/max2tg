@@ -80,32 +80,62 @@ def encode_frame(cmd: int, seq: int, opcode: int, payload: dict) -> bytes:
 
 def decode_frame(frame: bytes) -> dict:
     """Decode one MAX binary WebSocket frame into the legacy event envelope."""
-    if len(frame) < FRAME_HEADER_SIZE:
-        raise ValueError("MAX frame is shorter than its header")
-    proto, cmd, seq, opcode, compression = struct.unpack(">BBhhB", frame[:7])
-    if proto != FRAME_PROTO:
-        raise ValueError(f"unsupported MAX frame proto {proto}")
-    body_length = int.from_bytes(frame[7:10], "big")
-    body = frame[FRAME_HEADER_SIZE:]
-    if len(body) != body_length:
-        raise ValueError("MAX frame body length does not match header")
-    if compression:
-        body = lz4.block.decompress(body, uncompressed_size=body_length * compression)
-    if not body and opcode == OpCode.HEARTBEAT_PING:
-        payload = {}
-    else:
-        payload = msgpack.unpackb(
-            body,
-            raw=False,
-            strict_map_key=False,
-            ext_hook=_msgpack_ext_hook,
-        )
-        if payload is None:
+    try:
+        if len(frame) < FRAME_HEADER_SIZE:
+            raise ValueError("MAX frame is shorter than its header")
+        proto, cmd, seq, opcode, compression = struct.unpack(">BBhhB", frame[:7])
+        if proto != FRAME_PROTO:
+            raise ValueError(f"unsupported MAX frame proto {proto}")
+        body_length = int.from_bytes(frame[7:10], "big")
+        body = frame[FRAME_HEADER_SIZE:]
+        if len(body) != body_length:
+            raise ValueError("MAX frame body length does not match header")
+        if compression:
+            body = lz4.block.decompress(body, uncompressed_size=body_length * compression)
+        if not body and opcode == OpCode.HEARTBEAT_PING:
             payload = {}
-    if not isinstance(payload, dict):
-        raise ValueError("MAX frame payload must be a map")
-    payload = _stringify_map_keys(payload)
-    return {"cmd": cmd, "seq": seq, "opcode": opcode, "payload": payload}
+        else:
+            payload = msgpack.unpackb(
+                body,
+                raw=False,
+                strict_map_key=False,
+                ext_hook=_msgpack_ext_hook,
+            )
+            if payload is None:
+                payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("MAX frame payload must be a map")
+        payload = _stringify_map_keys(payload)
+        return {"cmd": cmd, "seq": seq, "opcode": opcode, "payload": payload}
+    except (ValueError, msgpack.UnpackException, lz4.block.LZ4BlockError) as exc:
+        if len(frame) >= FRAME_HEADER_SIZE:
+            proto, cmd, seq, opcode, compression = struct.unpack(">BBhhB", frame[:7])
+            body_length = int.from_bytes(frame[7:10], "big")
+            log.error(
+                "Skipping invalid MAX frame: "
+                "frame_size=%d, header=%s, proto=%d, "
+                "cmd=%d, seq=%d, opcode=%d, "
+                "compression=%d, declared_body=%d, "
+                "actual_body=%d, reason=%s",
+                len(frame),
+                frame[:FRAME_HEADER_SIZE].hex(),
+                proto,
+                cmd,
+                seq,
+                opcode,
+                compression,
+                body_length,
+                len(frame) - FRAME_HEADER_SIZE,
+                exc,
+            )
+        else:
+            log.error(
+                "Skipping short MAX frame: size=%d, data=%s, reason=%s",
+                len(frame),
+                frame.hex(),
+                exc,
+            )
+        raise
 
 
 def _json_default(value: Any) -> str:
@@ -352,34 +382,6 @@ class MaxClient:
                                     msgpack.UnpackException,
                                     lz4.block.LZ4BlockError,
                                 ):
-                                    frame = msg.data
-                                    if len(frame) >= FRAME_HEADER_SIZE:
-                                        proto, cmd, seq, opcode, compression = struct.unpack(
-                                            ">BBhhB", frame[:7]
-                                        )
-                                        body_length = int.from_bytes(frame[7:10], "big")
-                                        log.exception(
-                                            "Skipping invalid MAX frame: "
-                                            "frame_size=%d, header=%s, proto=%d, "
-                                            "cmd=%d, seq=%d, opcode=%d, "
-                                            "compression=%d, declared_body=%d, "
-                                            "actual_body=%d",
-                                            len(frame),
-                                            frame[:FRAME_HEADER_SIZE].hex(),
-                                            proto,
-                                            cmd,
-                                            seq,
-                                            opcode,
-                                            compression,
-                                            body_length,
-                                            len(frame) - FRAME_HEADER_SIZE,
-                                        )
-                                    else:
-                                        log.exception(
-                                            "Skipping short MAX frame: size=%d, data=%s",
-                                            len(frame),
-                                            frame.hex(),
-                                        )
                                     continue
                                 await self._handle(data)
                             elif msg.type == aiohttp.WSMsgType.TEXT:
