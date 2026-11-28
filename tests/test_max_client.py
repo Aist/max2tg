@@ -4,7 +4,9 @@ import asyncio
 import logging
 import math
 import struct
+from types import SimpleNamespace
 
+import aiohttp
 import lz4.block
 import msgpack
 import pytest
@@ -21,6 +23,49 @@ from app.max_client import (
     encode_frame,
     safe_url,
 )
+
+
+class _FakeWebSocket:
+    def __init__(self, messages):
+        self.messages = messages
+        self.index = 0
+        self.closed = False
+        self.sent = []
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.index >= len(self.messages):
+            raise StopAsyncIteration
+        message = self.messages[self.index]
+        self.index += 1
+        return message
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        return False
+
+    async def send_bytes(self, frame):
+        self.sent.append(frame)
+
+
+class _FakeClientSession:
+    def __init__(self, ws):
+        self.ws = ws
+        self.ws_connect_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def ws_connect(self, *args, **kwargs):
+        self.ws_connect_calls += 1
+        return self.ws
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +142,72 @@ class TestBinaryFrameCodec:
         first, second = [call.args[0] for call in client._ws.send_bytes.await_args_list]
         assert decode_frame(first)["seq"] == 32767
         assert decode_frame(second)["seq"] == -32768
+
+    def test_header_only_heartbeat_has_empty_payload(self):
+        frame = (
+            struct.pack(">BBhhB", 10, 0, 7, OpCode.HEARTBEAT_PING, 0)
+            + b"\x00\x00\x00"
+        )
+
+        assert decode_frame(frame)["payload"] == {}
+
+    def test_msgpack_nil_has_empty_payload(self):
+        body = msgpack.packb(None)
+        frame = (
+            struct.pack(">BBhhB", 10, 1, 7, OpCode.HEARTBEAT_PING, 0)
+            + len(body).to_bytes(3, "big")
+            + body
+        )
+
+        assert decode_frame(frame)["payload"] == {}
+
+    @pytest.mark.asyncio
+    async def test_server_heartbeat_ping_sends_ack(self):
+        client = _make_client()
+        client._ws = Mock(closed=False)
+        client._ws.send_bytes = AsyncMock()
+
+        await client._handle({
+            "opcode": OpCode.HEARTBEAT_PING,
+            "cmd": 0,
+            "seq": 7,
+            "payload": {},
+        })
+
+        sent = decode_frame(client._ws.send_bytes.await_args.args[0])
+        assert sent["opcode"] == OpCode.HEARTBEAT_PING
+        assert sent["payload"] == {"interactive": True}
+
+    @pytest.mark.asyncio
+    async def test_run_skips_invalid_frame_without_reconnecting(self, caplog):
+        client = _make_client()
+        ws = _FakeWebSocket([
+            SimpleNamespace(type=aiohttp.WSMsgType.BINARY, data=b"\x00"),
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.BINARY,
+                data=encode_frame(
+                    cmd=1,
+                    seq=7,
+                    opcode=OpCode.HEARTBEAT_PING,
+                    payload={},
+                ),
+            ),
+            SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None),
+        ])
+        session = _FakeClientSession(ws)
+        client._on_disconnect_cb = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with (
+            patch("app.max_client.aiohttp.ClientSession", return_value=session),
+            patch.object(client, "_handle", wraps=client._handle) as handle,
+            caplog.at_level(logging.ERROR, logger="app.max_client"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await client.run()
+
+        assert session.ws_connect_calls == 1
+        assert handle.await_count == 1
+        assert "Skipping short MAX frame" in caplog.text
 
 
 class TestBinaryPayloadLogging:
