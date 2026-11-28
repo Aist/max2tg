@@ -151,6 +151,15 @@ class TestBinaryFrameCodec:
 
         assert decode_frame(frame)["payload"] == {}
 
+    def test_header_only_frame_of_any_opcode_has_empty_payload(self):
+        """An empty response must decode, not stall the caller until timeout."""
+        frame = (
+            struct.pack(">BBhhB", 10, 1, 7, OpCode.GET_MESSAGES, 0)
+            + b"\x00\x00\x00"
+        )
+
+        assert decode_frame(frame)["payload"] == {}
+
     def test_msgpack_nil_has_empty_payload(self):
         body = msgpack.packb(None)
         frame = (
@@ -208,6 +217,48 @@ class TestBinaryFrameCodec:
         assert session.ws_connect_calls == 1
         assert handle.await_count == 1
         assert "Skipping short MAX frame" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_run_survives_unexpected_decoder_error(self):
+        """A decoder failure outside the known exception types must not
+        tear down the connection either."""
+        client = _make_client()
+        ws = _FakeWebSocket([
+            SimpleNamespace(type=aiohttp.WSMsgType.BINARY, data=b"payload"),
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.BINARY,
+                data=encode_frame(
+                    cmd=1,
+                    seq=7,
+                    opcode=OpCode.HEARTBEAT_PING,
+                    payload={},
+                ),
+            ),
+            SimpleNamespace(type=aiohttp.WSMsgType.CLOSED, data=None),
+        ])
+        session = _FakeClientSession(ws)
+        client._on_disconnect_cb = AsyncMock(side_effect=asyncio.CancelledError)
+
+        real_decode = decode_frame
+        calls = 0
+
+        def flaky_decode(frame):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise TypeError("decoder bug")
+            return real_decode(frame)
+
+        with (
+            patch("app.max_client.aiohttp.ClientSession", return_value=session),
+            patch("app.max_client.decode_frame", side_effect=flaky_decode),
+            patch.object(client, "_handle", wraps=client._handle) as handle,
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await client.run()
+
+        assert session.ws_connect_calls == 1
+        assert handle.await_count == 1
 
 
 class TestBinaryPayloadLogging:

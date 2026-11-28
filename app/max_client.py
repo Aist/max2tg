@@ -92,7 +92,8 @@ def decode_frame(frame: bytes) -> dict:
             raise ValueError("MAX frame body length does not match header")
         if compression:
             body = lz4.block.decompress(body, uncompressed_size=body_length * compression)
-        if not body and opcode == OpCode.HEARTBEAT_PING:
+        if not body:
+            # Header-only frames (heartbeats, empty responses) carry no payload.
             payload = {}
         else:
             payload = msgpack.unpackb(
@@ -377,11 +378,10 @@ class MaxClient:
                             if msg.type == aiohttp.WSMsgType.BINARY:
                                 try:
                                     data = decode_frame(msg.data)
-                                except (
-                                    ValueError,
-                                    msgpack.UnpackException,
-                                    lz4.block.LZ4BlockError,
-                                ):
+                                except Exception:
+                                    # Broad on purpose: no decoding failure,
+                                    # present or future, may tear down the
+                                    # connection. decode_frame logs the details.
                                     continue
                                 await self._handle(data)
                             elif msg.type == aiohttp.WSMsgType.TEXT:
